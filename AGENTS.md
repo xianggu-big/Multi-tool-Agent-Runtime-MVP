@@ -5,6 +5,8 @@
 
 ## 当前状态（最后更新 2026-10-21；工程实测基线 2026-10-21 = **56 个测试文件 / 396 子测试 / 396 通过 / 0 失败 / 0 跳过 / 约 18s**；Docker 已启动，`40j` 已补跑通过）
 
+> **📦 GitHub 发布准备（2026-10-21）**：仓库已脱敏并**重写为单一干净提交**（`6d3406e`，243 文件）。排除 `.eval/`（本机实测脚本，含个人绝对路径）、`.agents/`（个人工作流配置）、`reports/runs/`、`*.db`；`.env` / `data/` / `.workbuddy/` / `.zcode/` 从未入库。扫描结果：跟踪文件里无 `xianggu`、无 `C:\Users…`、无 `D:\c学习数据结构…`、无真实密钥（仅 `sk-xxx` 占位）。根 `README.md` = GitHub 首页；`.github/workflows/ci.yml` 保留。**尚未配置 remote、未推送**（本机无 gh CLI）；未附 LICENSE（默认保留所有权利，需要再补）。
+
 > **✅ R23 上下文滚动摘要 + 压缩迟滞已修（2026-10-21）**：`compactMessages` 识别旧摘要并**原样保留**，只压旧摘要之后的新增消息；首次压缩把任务目标原文（≤2000 字符）写入摘要；再次压缩要求活动区 ≥2000 字符且自上次压缩后新增 ≥4000 字符或 ≥4 条消息（上下文水位只作门禁，不再一过 60% 就每步压）；摘要达 `COMPACT_SUMMARY_MAX_CHARS=24000` 后停止压缩并标记 `capReached`，绝不截断旧摘要。新增落盘事件 `context_compacted` 与 `run_digest.compaction`。回归 `tests/33h~33l`、`tests/56f`。
 
 > **✅ R25 压缩水位语义修正（2026-10-21）**：水位从「任务累计预算」改为 **`lastPromptTokens / provider.contextWindow`**（DeepSeek 预设 1,048,576；Mock 32,768），`tokenBudget` 只做总预算；窗口未知才显式回退并标 `watermarkSource=unknown`，usage 缺失按字符估算并标 `estimated`。`context_compacted` / `run_digest.compaction` 新增 `watermark / watermarkSource / promptTokens / contextWindow`。回归 `tests/33m~33p`、`56f`；全量 **396 子测试（396 通过 / 0 跳过 / 0 失败 / 约 18s）**；`eval:edit` 7/7。残余：其余 Provider 的窗口值未补齐；真实模型 20~30 步长任务 A/B 未做；前端 compaction 面板属 R24。
