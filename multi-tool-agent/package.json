@@ -1,0 +1,52 @@
+{
+  "name": "multi-tool-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "description": "A reusable lightweight Agent Runtime that drives both a Codebase Agent and a Research Agent through one shared Agent Loop.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "doctor": "node --import tsx scripts/doctor.ts",
+    "start": "node --import tsx src/index.ts",
+    "dev": "node --watch --import tsx src/index.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "demo:codebase": "node --import tsx src/demo/codebase.ts",
+    "demo:research": "node --import tsx src/demo/research.ts",
+    "demo:misc": "node --import tsx src/demo/misc.ts",
+    "demo:orchestrator": "node --import tsx src/demo/orchestrator.ts",
+    "report": "node --import tsx src/demo/codebase.ts && node --import tsx src/demo/research.ts",
+    "smoke:stream": "node --import tsx scripts/stream-smoke.ts",
+    "smoke:llm": "node --import tsx scripts/llm-smoke.ts",
+    "agents:docs": "node --import tsx scripts/gen-agent-docs.ts",
+    "agents:lint": "node --import tsx scripts/agents-lint.ts",
+    "report:params": "node --import tsx scripts/gen-params-report.ts",
+    "report:agent": "node --import tsx scripts/gen-agent-report.ts",
+    "report:run": "node --import tsx scripts/gen-run-report.ts",
+    "digest:list": "node --import tsx scripts/run-digest-list.ts",
+    "rag:bench": "node --import tsx scripts/rag-bench.ts",
+    "rag:ablation": "node --import tsx scripts/rag-ablation.ts",
+    "eval:edit": "node --import tsx scripts/edit-eval.ts",
+    "security:redteam": "node --import tsx scripts/injection-redteam.ts",
+    "report:refresh": "node --import tsx scripts/gen-params-report.ts && node --import tsx scripts/gen-agent-docs.ts && node --import tsx scripts/gen-agent-report.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "express": "^4.21.2",
+    "sqlite-vec": "^0.1.9",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.7.3"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "esbuild": true
+  }
+}

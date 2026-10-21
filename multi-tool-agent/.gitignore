@@ -1,0 +1,25 @@
+# 依赖
+node_modules/
+
+# 运行时数据（SQLite 数据库）
+data/
+
+# 环境变量与密钥（.env.example 不受影响）
+.env
+.env.local
+
+# 构建产物
+dist/
+*.tsbuildinfo
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+.DS_Store
+
+# 编辑器
+.vscode/
+.idea/
+
+# 编辑评测只跑单场景时的临时报告（正式报告是 EDIT_EVAL.md）
+reports/EDIT_EVAL.partial.md

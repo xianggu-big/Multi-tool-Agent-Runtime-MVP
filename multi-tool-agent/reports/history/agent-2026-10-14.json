@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-14",
+  "generatedAt": "2026-10-14T04:28:44.239Z",
+  "totals": {
+    "n": 246,
+    "ok": 230,
+    "successRate": 0.9349593495934959,
+    "avgSteps": 3.8739837398373984,
+    "avgMs": 3433.8455284552847,
+    "p95Ms": 17202,
+    "tokens": 1363338,
+    "cachedTokens": 544768,
+    "cost": 0.5656856199999999,
+    "toolCalls": 836,
+    "modelCalls": 953
+  },
+  "real": {
+    "n": 40,
+    "ok": 25,
+    "successRate": 0.625,
+    "avgSteps": 3.975,
+    "avgMs": 19537.625,
+    "p95Ms": 70991,
+    "tokens": 1283166,
+    "cachedTokens": 544768,
+    "cost": 0.5656856199999999,
+    "toolCalls": 244,
+    "modelCalls": 159
+  },
+  "byType": [
+    {
+      "type": "codebase",
+      "n": 96,
+      "ok": 83,
+      "avgMs": 2831.59375,
+      "cost": 0.5388819927999999
+    },
+    {
+      "type": "research",
+      "n": 131,
+      "ok": 131,
+      "avgMs": 537.1526717557252,
+      "cost": 0.0006496000000000002
+    },
+    {
+      "type": "misc",
+      "n": 10,
+      "ok": 9,
+      "avgMs": 13714.8,
+      "cost": 0.0146534696
+    },
+    {
+      "type": "orchestrator",
+      "n": 9,
+      "ok": 7,
+      "avgMs": 40597.555555555555,
+      "cost": 0.011500557600000003
+    }
+  ]
+}

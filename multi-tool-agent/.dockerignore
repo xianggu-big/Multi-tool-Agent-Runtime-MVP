@@ -1,0 +1,10 @@
+# 沙箱镜像构建上下文排除（M1 Step1 · 评审 P0-1）
+# 构建只需要 package.json + package-lock.json；其余一律不进上下文（快、且避免把宿主
+# Windows ABI 的 node_modules 误带进镜像——那是评审点名的"必崩"路径）。
+node_modules
+data
+.git
+.workbuddy
+.zcode
+reports/history
+*.log

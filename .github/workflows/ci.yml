@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: multi-tool-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: multi-tool-agent/package-lock.json
+      - run: npm ci
+      - name: 钉死宿主 Node 绝对路径（Linux 默认值不在本机）
+        run: echo "HOST_NODE_PATH=$(command -v node)" >> "$GITHUB_ENV"
+      - run: npm run typecheck
+      - run: npm run agents:lint
+      - run: npm test
+        env:
+          # CI 没构建沙箱镜像：真实 Docker 用例会自动 skip，其余必须全绿。
+          SANDBOX_IMAGE: mta-sandbox:node24

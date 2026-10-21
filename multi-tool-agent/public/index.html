@@ -1,0 +1,2724 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Multi-tool Agent Workbench</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --panel: #ffffff; --border: #e2e6ed; --text: #1f2430;
+    --muted: #6b7280; --primary: #2563eb; --green: #15a34a; --red: #dc2626;
+    --amber: #b45309; --code: #0f172a;
+    --purple: #7c3aed; --think: #64748b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; }
+  header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 18px; }
+  header .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 16px 16px 0; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .panel-title { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: .02em; margin: 2px 0 10px; text-transform: uppercase; }
+  details.settings { border: 1px solid var(--border); border-radius: 10px; padding: 4px 12px; margin: 8px 0; background: #fbfcfe; }
+  details.settings[open] { padding-bottom: 12px; }
+  details.settings summary { cursor: pointer; font-weight: 700; color: var(--primary); padding: 8px 2px; font-size: 13px; }
+  .inputbar { position: sticky; bottom: 0; z-index: 20; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px 14px 0 0; padding: 12px 16px 14px; margin: 14px 0 0;
+    display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+    box-shadow: 0 -4px 18px rgba(15,23,42,.08); }
+  .inputbar .goalbox { flex: 1 1 320px; min-width: 240px; }
+  .inputbar label { margin: 0 0 3px; font-size: 12px; }
+  .inputbar select, .inputbar input { width: auto; min-width: 128px; }
+  .inputbar textarea { min-height: 46px; max-height: 160px; resize: none; }
+  .inputbar .acts { display: flex; gap: 8px; align-items: center; }
+  .inputbar .rpbox { flex: 1 1 200px; min-width: 180px; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  input, textarea, select { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 8px;
+    font: inherit; background: #fff; color: var(--text); }
+  textarea { resize: vertical; min-height: 64px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button { cursor: pointer; border: 0; border-radius: 8px; padding: 9px 14px; font-weight: 600; }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-ghost { background: #eef2f7; color: var(--text); }
+  .btn-danger { background: var(--red); color: #fff; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+  .pill.running { background: #e0edff; color: var(--primary); }
+  .pill.completed { background: #e7f7ec; color: var(--green); }
+  .pill.failed, .pill.limit_reached, .pill.cancelled { background: #fdeaea; color: var(--red); }
+  .pill.awaiting_user { background: #fff7ed; color: var(--amber); }
+  .stats { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0; }
+  .stat { background: #f1f5f9; border-radius: 8px; padding: 8px 12px; min-width: 92px; }
+  .stat b { display: block; font-size: 18px; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  #events { max-height: 56vh; overflow: auto; }
+  .ev { border-left: 3px solid var(--border); padding: 6px 10px; margin: 6px 0; background: #fbfcfe; border-radius: 6px; }
+  .ev .t { font-weight: 700; color: var(--primary); }
+  .ev .meta { color: var(--muted); font-size: 12px; }
+  .ev.ok { border-color: var(--green); }
+  #conversationLog { max-height: 40vh; overflow: auto; }
+  .conv { border-left: 3px solid var(--border); padding: 8px 10px; margin: 8px 0; background: #fbfcfe; border-radius: 6px; }
+  .conv .q { font-weight: 600; cursor: pointer; }
+  .conv .q:hover { color: var(--primary); }
+  .conv .a { color: var(--muted); margin-top: 4px; white-space: pre-wrap; font-size: 13px; max-height: 120px; overflow: auto; }
+  .conv .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .conv.ok { border-color: var(--green); }
+  .conv.failed, .conv.limit_reached, .conv.cancelled { border-color: var(--red); }
+  .conv.awaiting_user { border-color: var(--amber); }
+  .ev.err { border-color: var(--red); }
+  .ev.tool { border-color: #8b5cf6; }
+  .answer { white-space: pre-wrap; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .answer.error { background: #fdeaea; border-color: #f5b5b5; color: #7f1d1d; }
+  .src { font-size: 12px; color: var(--muted); margin: 2px 0; }
+  .src a { color: var(--primary); }
+  .hide { display: none !important; }
+  .note { font-size: 12px; color: var(--amber); background: #fff7ed; border: 1px solid #fed7aa; padding: 8px; border-radius: 8px; margin-top: 8px; }
+  .note.info { color: #1e40af; background: #eff6ff; border-color: #bfdbfe; }
+  details.api { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin-top: 10px; background: #fcfdff; }
+  details.api summary { cursor: pointer; font-weight: 700; }
+  .hint { font-size: 11px; color: var(--muted); margin: 2px 0 0; }
+  .hint.warn { color: var(--amber); }
+  .envflag { font-size: 11px; color: var(--green); font-weight: 700; }
+  .envflag.no { color: var(--amber); }
+  .check { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 8px; font-weight: 400; }
+  .check input { width: auto; }
+
+  .ctx-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .ctx-pill { background: #e0edff; color: var(--primary); padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+
+  /* 视图 tab */
+  .tabs { display: flex; gap: 6px; margin: 10px 0 8px; border-bottom: 1px solid var(--border); }
+  .tabs button { background: transparent; color: var(--muted); border-radius: 8px 8px 0 0; border-bottom: 2px solid transparent; padding: 8px 14px; }
+  .tabs button.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 700; }
+
+  /* ---------------- 实时视图（Live） ---------------- */
+  .live-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted);
+    padding: 6px 8px; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; }
+  .live-head .grow { flex: 1; }
+  .phase { font-weight: 700; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: #eef2f7; color: var(--muted); }
+  .phase.thinking { background: #e0edff; color: var(--primary); }
+  .phase.tool { background: #f3e8ff; color: var(--purple); }
+  .phase.done { background: #e7f7ec; color: var(--green); }
+  .phase.error { background: #fdeaea; color: var(--red); }
+  .live { max-height: 58vh; overflow: auto; padding: 10px 4px 4px; }
+  .live:empty::before { content: "任务启动后，思考文本与工具调用会实时出现在这里…"; color: var(--muted); font-size: 13px; }
+  .lcard { border: 1px solid var(--border); border-radius: 10px; margin: 0 0 10px; background: #fff; overflow: hidden; }
+  .lcard.user { border-color: #cbd5e1; background: #f8fafc; }
+  .lcard.llm { border-color: #bfdbfe; }
+  .lcard.tool { border-color: #ddd6fe; }
+  .lcard.answer { border-color: #fde68a; background: #fffbeb; }
+  .lcard.error { border-color: #fecaca; background: #fef2f2; }
+  .lcard .lhead { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: #fbfcfe;
+    border-bottom: 1px solid #eef2f7; font-size: 12px; }
+  .lcard.user .lhead { background: #f1f5f9; }
+  .lcard.llm .lhead { background: #eff6ff; }
+  .lcard.tool .lhead { background: #f5f3ff; }
+  .lcard.answer .lhead { background: #fffbeb; }
+  .lcard.error .lhead { background: #fef2f2; }
+  .lcard .ltitle { font-weight: 700; }
+  .lcard .lsub { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+  .lcard .grow { flex: 1; }
+  .lcard .lstatus { font-size: 11px; padding: 1px 8px; border-radius: 999px; font-weight: 700; }
+  .lcard .lstatus.wait { background: #eef2f7; color: var(--muted); }
+  .lcard .lstatus.run { background: #e0edff; color: var(--primary); }
+  .lcard .lstatus.ok { background: #e7f7ec; color: var(--green); }
+  .lcard .lstatus.err { background: #fdeaea; color: var(--red); }
+  .lcard .ldur { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .lcard .lbodyswitch { background: transparent; color: var(--muted); padding: 2px 6px; font-size: 11px; }
+  .lcard .lbody { padding: 8px 10px; font-size: 13px; }
+  .lcard .lbody.closed { display: none; }
+  .lbl { display: inline-block; font-size: 10px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0 4px; margin-bottom: 3px; }
+  .lthink { color: var(--think); font-style: italic; background: #f8fafc; border-left: 3px solid #cbd5e1;
+    padding: 6px 8px; border-radius: 4px; margin-bottom: 8px; white-space: pre-wrap; }
+  .lsay { white-space: pre-wrap; word-break: break-word; }
+  .lcard.streaming .lsay::after { content: "▍"; color: var(--primary); animation: blink 1s steps(1) infinite; }
+  .lcard.streaming .lthink::after { content: "▍"; color: var(--think); animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .largs, .lresult, .lraw { margin: 6px 0 0; font-size: 12px; }
+  .largs summary, .lresult summary, .lraw summary { cursor: pointer; color: var(--muted); }
+  .largs pre, .lresult pre, .lraw pre { white-space: pre-wrap; word-break: break-word; background: #f8fafc;
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 6px 0 0; max-height: 260px; overflow: auto; }
+  .lresult.err pre { background: #fef2f2; border-color: #fecaca; }
+  .lfail { color: var(--red); font-weight: 600; }
+  .lmeta { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .live-foot { display: flex; justify-content: center; padding: 4px 0 0; }
+  .tobottom { background: #1f2430; color: #fff; font-size: 12px; padding: 6px 12px; border-radius: 999px; }
+  .diag { border: 1px dashed #94a3b8; border-radius: 8px; padding: 8px; margin: 8px 0 0; font-size: 11px;
+    background: #f8fafc; max-height: 190px; overflow: auto; }
+  .diag table { width: 100%; border-collapse: collapse; font-family: ui-monospace, Consolas, monospace; }
+  .diag th, .diag td { text-align: left; padding: 2px 6px; border-bottom: 1px solid #eef2f7; white-space: nowrap; }
+  .err-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .err-table th, .err-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eef2f7; vertical-align: top; }
+  .err-table thead th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .diag .k { color: var(--muted); }
+  .diag-conn { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; color: #334155; }
+  .diag-conn b { font-family: ui-monospace, Consolas, monospace; }
+
+  /* 编排报告与子任务卡片 */
+  .orch-report { margin-top: 12px; border: 1px solid #c7d2fe; background: #eef2ff; border-radius: 10px; padding: 10px 12px; }
+  .orch-report h3 { margin: 0 0 6px; font-size: 14px; }
+  .orch-report .substat { display: inline-block; margin-right: 10px; font-size: 12px; }
+  .orch-report .srow { display: flex; gap: 8px; font-size: 13px; padding: 2px 0; }
+  .orch-report .srow b { min-width: 92px; color: #3730a3; }
+  .orch-report .ofind { font-size: 12px; color: #334155; padding: 1px 0; }
+  .orch-report .oconflict { font-size: 12px; color: #92400e; background: #fffbeb; border: 1px solid #fbbf24; border-radius: 6px; padding: 6px; margin-top: 6px; }
+  .orch-report .ounresolved { font-size: 12px; color: #9a3412; }
+  .orch-report .osub { font-size: 12px; color: #1e293b; border-top: 1px dashed #c7d2fe; margin-top: 6px; padding-top: 6px; }
+  .lcard.subtask { border-color: #a5b4fc; background: #f5f7ff; }
+  .lcard.subtask .lhead { background: #eef2ff; }
+
+  /* 杂项结构化报告 */
+  .misc-report { margin-top: 12px; border: 1px solid #bbf7d0; background: #f0fdf4; border-radius: 10px; padding: 10px 12px; }
+  .misc-report h3 { margin: 0 0 6px; font-size: 14px; }
+  .misc-report .mi { display: flex; gap: 8px; font-size: 13px; padding: 2px 0; }
+  .misc-report .mi b { min-width: 120px; color: #14532d; }
+  .misc-report .mf { font-size: 12px; color: #334155; }
+  .misc-report pre { white-space: pre-wrap; background: #fff; border: 1px solid #d1fae5; border-radius: 6px; padding: 8px; margin: 6px 0 0; max-height: 240px; overflow: auto; }
+  .misc-report .escalate { margin-top: 8px; border: 1px solid #fbbf24; background: #fffbeb; border-radius: 8px; padding: 8px; font-size: 12px; color: #92400e; }
+  .misc-report .escbtn { margin-top: 6px; }
+  .misc-report summary { cursor: pointer; font-size: 12px; color: #475569; }
+  .misc-unstructured { border-color: #fed7aa; background: #fff7ed; }
+  .misc-unstructured .mi b { color: #7c2d12; }
+
+  /* 流程监控：节点流 */
+  .flow { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin-top: 8px; }
+  .fnode { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: #fbfcfe; }
+  .fnode .icon { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+  .fnode .body { flex: 1; min-width: 0; }
+  .fnode .nm { font-weight: 700; }
+  .fnode .sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fnode .dur { font-variant-numeric: tabular-nums; color: var(--muted); flex: 0 0 auto; }
+  .fnode .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; flex: 0 0 auto; }
+  .farrow { align-self: center; color: var(--muted); line-height: 1; padding: 3px 0; }
+  .fnode.run { border-color: #86efac; background: #f0fdf4; }
+  .fnode.llm { border-color: #bfdbfe; background: #eff6ff; }
+  .fnode.tool { border-color: #ddd6fe; background: #f5f3ff; }
+  .fnode.answer { border-color: #fde68a; background: #fffbeb; }
+  .fnode.error { border-color: #fecaca; background: #fef2f2; }
+
+  /* 瀑布图 */
+  .waterfall-wrap { overflow-x: auto; }
+  .trace-title { font-weight: 700; margin: 14px 0 4px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 6px 0; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+
+  /* ---------------- 人工审批卡（M1 写能力门禁） ---------------- */
+  .phase.approval { background: #fff7ed; color: var(--amber); }
+  .lcard.approval { border-color: #fbbf24; background: #fffdf5; }
+  .lcard.approval .lhead { background: #fffbeb; }
+  @keyframes approvalFlash { 0%, 55% { box-shadow: 0 0 0 3px rgba(180, 83, 9, .38); } 100% { box-shadow: 0 0 0 3px rgba(180, 83, 9, 0); } }
+  .lcard.approval.flash { animation: approvalFlash 2.4s ease-out 1; }
+  label.flash { animation: approvalFlash 2.4s ease-out 1; border-radius: 8px; }
+  /* 写能力意图确认对话框（M1'）：修改操作前的可见决策点（不再是"静默只读"） */
+  .wmask { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+  .wmodal { background: #fff; border-radius: 12px; padding: 18px; width: 480px; max-width: 92vw; box-shadow: 0 12px 32px rgba(15, 23, 42, .25); }
+  .wmtitle { font-weight: 500; font-size: 14px; margin-bottom: 8px; color: #0f172a; }
+  .wmbody { font-size: 12.5px; line-height: 1.7; color: #334155; }
+  .wmactions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .approval-file { padding: 3px 0; }
+  .approval-file .op { color: var(--muted); font-size: 11px; }
+  .approval-file .dstat { font-variant-numeric: tabular-nums; font-size: 12px; margin: 0 4px; }
+  .approval-file .dstat .p { color: var(--green); }
+  .approval-file .dstat .m { color: var(--red); }
+  .approval-check { font-size: 12px; padding: 1px 0; color: var(--muted); }
+  .approval-check.bad { color: var(--red); }
+  .approval-highrisk { margin-top: 8px; padding: 8px 10px; border: 1px solid #fca5a5; border-radius: 8px; background: #fef2f2; color: #991b1b; font-size: 12px; line-height: 1.55; }
+  .approval-highrisk-title { font-weight: 700; margin-bottom: 3px; }
+  .approval-confirm-label { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; cursor: pointer; }
+  .approval-confirm-label input { margin-top: 2px; flex: 0 0 auto; }
+  .ldiff { font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.45;
+    background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+    margin: 6px 0 0; max-height: 260px; overflow: auto; white-space: pre; tab-size: 2; }
+  .ldiff .add { display: block; background: #e7f7ec; color: #14532d; }
+  .ldiff .del { display: block; background: #fdeaea; color: #7f1d1d; }
+  .ldiff .hunk { display: block; color: var(--muted); }
+  .approval-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .approval-actions button { font-size: 12px; padding: 7px 12px; }
+  .approval-actions input { flex: 1 1 180px; min-width: 150px; padding: 6px 8px; font-size: 12px; }
+  .approval-state { font-size: 12px; color: var(--muted); margin-top: 6px; font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Multi-tool Agent Workbench</h1>
+  <div class="sub">同一套 Agent Runtime 驱动 Codebase Agent 与 Research Agent · 实时流式展示（思考 / 工具调用 / 结果）· 轻量可观测</div>
+</header>
+
+<div class="layout">
+  <div class="panel">
+    <div class="panel-title">设置</div>
+
+    <details class="settings" open>
+      <summary>任务参数</summary>
+      <div id="orchestrationFields" class="hide">
+        <label>编排参数</label>
+        <div class="row">
+          <div><label>最大并行宽度</label><input id="orchMaxWidth" type="number" min="1" max="8" value="4" /></div>
+          <div><label>子 Agent 白名单</label><input id="orchSpecs" placeholder="留空=全部（如 dir-inventory,code-audit）" /></div>
+        </div>
+        <label class="check"><input type="checkbox" id="orchSelfTools" /> 允许主 Agent 自己用只读工具（默认只委派+汇总）</label>
+        <label class="check"><input type="checkbox" id="allowWriteSpecs" /> 允许修改文件（写能力：沙箱验证 + 落盘前人工审批）</label>
+        <label class="check"><input type="checkbox" id="strictVerify" /> 严格验证：审批前额外跑全量测试（L2，较慢）</label>
+        <p class="hint">勾选后，本任务可派发「code-edit」子 Agent 修改仓库文件：改动先进入 Docker 沙箱跑检查阶梯（语法/类型/测试），并在<b>落盘前弹出审批卡</b>由你决定（完全同意此文件 / 仅同意本次 / 拒绝）。不勾选 = 只读。</p>
+        <p class="hint warn hide" id="writeDisabledNote">※ 写能力已被部署配置禁用（CODEBASE_WRITE_ENABLED=false）：勾选不会生效。</p>
+        <p class="hint warn hide" id="writeWhitelistNote">※ 子 Agent 白名单未包含 code-edit：写能力不会生效（把 code-edit 加入白名单，或清空白名单）。</p>
+        <p class="hint" id="orchNote">子 Agent 契约：<span id="orchSpecList">加载中…</span></p>
+        <p class="hint">编排 = 主 Agent 拆分 → 并行派发子 Agent（各自独立上下文/预算/权限）→ 主 Agent 汇总核验。</p>
+      </div>
+
+      <div id="miscFields" class="hide">
+        <label>杂项子类型（可选，仅用于提示模型）</label>
+        <select id="miscSubtask">
+          <option value="">（不指定）</option>
+          <option value="inventory">inventory（清点统计）</option>
+          <option value="locate">locate（定位）</option>
+          <option value="read">read（读取与解释）</option>
+          <option value="lint">lint（例行体检）</option>
+          <option value="other">other</option>
+        </select>
+        <p class="hint">杂项 Agent 只读、预算更小（默认 6 步 / 6 次模型调用 / 50k tokens），并且**不能**跑命令、联网或改文件。</p>
+      </div>
+      <div id="researchFields" class="hide">
+        <label>研究主题 (topics, 逗号分隔)</label>
+        <input id="topics" placeholder="esbuild, rollup" />
+        <label>允许域名白名单（可选, 逗号分隔）</label>
+        <input id="allowedDomains" placeholder="esbuild.github.io" />
+      </div>
+
+      <label>Mock 演示剧本（可选）</label>
+      <select id="mockScenario">
+        <option value="">（无 / 由模型决定）</option>
+        <option value="codebase-basic">codebase-basic</option>
+        <option value="research-basic">research-basic</option>
+        <option value="misc-basic">misc-basic</option>
+      </select>
+
+      <div class="row">
+        <div><label>最大步骤</label><input id="maxSteps" type="number" value="12" /></div>
+        <div><label>模型调用上限</label><input id="maxModelCalls" type="number" value="20" /></div>
+      </div>
+      <div class="row">
+        <div><label>工具调用上限</label><input id="maxToolCalls" type="number" value="40" /></div>
+        <div><label>总超时(ms)</label><input id="totalTimeout" type="number" value="120000" /></div>
+      </div>
+    </details>
+
+    <details class="settings" id="apiPanel">
+      <summary>模型 LLM</summary>
+      <label>LLM 模式</label>
+      <select id="llmMode">
+        <option value="mock">Mock（无需 Key，仅演示）</option>
+        <option value="openai">真实接口（OpenAI 兼容）</option>
+      </select>
+
+      <div id="realLlmFields" class="hide">
+        <label>服务商</label>
+        <select id="llmProvider"></select>
+        <p class="hint" id="providerNote"></p>
+
+        <label>模型</label>
+        <select id="llmModel"></select>
+        <input id="llmModelCustom" class="hide" autocomplete="off" placeholder="自定义模型 ID" />
+        <p class="hint" id="modelNote"></p>
+
+        <label>Base URL</label>
+        <input id="llmBaseUrl" autocomplete="off" placeholder="https://api.deepseek.com" />
+        <p class="hint" id="baseUrlNote"></p>
+
+        <label>API Key</label>
+        <input id="llmApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+        <p class="hint">环境变量 <b id="llmKeyEnvName">—</b>：<span id="envLlmFlag" class="envflag">（未配置）</span>
+          <span id="llmKeyLink"></span></p>
+
+        <div class="row" style="margin-top:8px">
+          <button class="btn-ghost" type="button" id="testBtn">测试连接</button>
+          <button class="btn-ghost" type="button" id="resetParamsBtn">恢复默认参数</button>
+        </div>
+        <div id="testResult" class="note info hide"></div>
+
+        <details class="api" style="margin-top:10px">
+          <summary>Token 限制（预算 vs 单次输出）</summary>
+          <div class="row">
+            <div><label>单次输出上限 max_tokens</label><input id="llmMaxTokens" type="number" min="1" max="384000" placeholder="留空=厂商默认" /></div>
+            <div><label>任务 Token 预算（≥1）</label><input id="tokenBudget" type="number" min="1" value="200000" /></div>
+          </div>
+          <div class="row">
+            <div><label>费用预算 (USD，0 或留空=不限)</label><input id="costBudget" type="number" min="0" step="0.01" value="0" /></div>
+          </div>
+          <p class="hint"><b>max_tokens</b> 限制<u>一次回复</u>生成多少 token（含思考内容，太小会出现「思考写完、正文为空」）；
+            <b>任务 Token 预算</b> 是整个任务<u>累计</u>输入+输出，超出即停止并标记 <code>limit_reached</code>。</p>
+        </details>
+
+        <details class="api" style="margin-top:10px">
+          <summary>高级生成参数（调参用）</summary>
+          <div class="row">
+            <div><label>temperature</label><input id="llmTemperature" type="number" min="0" max="2" step="0.1" placeholder="不发送" /></div>
+            <div><label>top_p</label><input id="llmTopP" type="number" min="0" max="1" step="0.05" placeholder="不发送" /></div>
+          </div>
+          <div class="row">
+            <div><label>frequency_penalty</label><input id="llmFreqPenalty" type="number" min="-2" max="2" step="0.1" placeholder="不发送" /></div>
+            <div><label>presence_penalty</label><input id="llmPresPenalty" type="number" min="-2" max="2" step="0.1" placeholder="不发送" /></div>
+          </div>
+          <div class="row">
+            <div><label>思考模式</label><select id="llmThinking"></select></div>
+            <div><label>思考深度</label><select id="llmEffort"></select></div>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn-ghost" type="button" data-param-preset="precise">精确 0.0</button>
+            <button class="btn-ghost" type="button" data-param-preset="balanced">平衡 1.0</button>
+            <button class="btn-ghost" type="button" data-param-preset="creative">创意 1.5</button>
+          </div>
+          <div id="paramHelp" class="hint"></div>
+        </details>
+      </div>
+    </details>
+
+    <details class="settings">
+      <summary>搜索</summary>
+      <label>搜索提供方</label>
+      <select id="searchProvider">
+        <option value="offline">离线资料（OFFLINE_MOCK，非实时）</option>
+        <option value="serper">Serper（真实联网搜索）</option>
+      </select>
+      <div id="serperFields" class="hide">
+        <label>Serper API Key</label>
+        <input id="serperKey" type="password" autocomplete="off" placeholder="Serper API Key" />
+        <p class="hint">环境变量已配置 <span id="envSearchFlag" class="envflag">（未配置）</span></p>
+      </div>
+    </details>
+
+    <details class="settings">
+      <summary>实时流 & 存储</summary>
+      <label class="check">
+        <input type="checkbox" id="liveDeltas" checked /> 实时流式输出（思考文本逐字推送）
+      </label>
+      <p class="hint">关闭后不产生文本增量事件（与测试/CI 行为一致）。增量事件不落盘，只走实时通道。</p>
+      <label class="check">
+        <input type="checkbox" id="rememberKeys" /> 在本浏览器保存 Key 与参数（localStorage，仅存于本机）
+      </label>
+    </details>
+
+    <div class="note info" id="modeNote">正在读取服务端配置…</div>
+    <div class="note">Key 仅用于本次运行：不写入 SQLite、不写入事件日志（已脱敏）。当前为本地 HTTP，无 TLS，请勿在公网暴露。</div>
+  </div>
+
+  <div class="panel">
+    <details id="convPanel" class="settings">
+      <summary>对话记录（本次会话内累积，不会因为新提问而清空）</summary>
+      <div id="conversationLog"><div class="meta" style="color:#6b7280">还没有对话。每次完成后，问答会自动累积在这里。</div></div>
+    </details>
+    <div id="statusLine"><span class="pill" style="background:#eee;color:#666">未开始</span></div>
+    <div class="stats" id="stats"></div>
+    <div class="note info" id="verifyPanel" style="display:none;align-items:center;gap:10px;flex-wrap:wrap">
+      <b>深度验证（L2）</b>
+      <button class="btn-ghost" type="button" id="verifyBtn">重新验证当前仓库</button>
+      <span class="meta" id="verifyStatus" style="color:#1e40af">—</span>
+      <button class="btn-ghost" type="button" id="verifyCancelBtn" style="display:none">取消验证</button>
+      <div id="verifyDetail" style="flex-basis:100%;white-space:pre-wrap;font-size:12px;color:#991b1b"></div>
+    </div>
+    <div class="note" id="recoveryPanel" style="display:none;align-items:center;gap:10px;flex-wrap:wrap">
+      <b id="recoveryTitle">崩溃恢复</b>
+      <span class="meta" id="recoveryStatus">—</span>
+      <button class="btn-ghost" type="button" id="recoveryRollbackBtn">回滚本次改动</button>
+      <button class="btn-ghost" type="button" id="recoveryAcceptBtn">保留现状</button>
+      <div id="recoveryDetail" style="flex-basis:100%;white-space:pre-wrap;font-size:12px;color:#7c2d12"></div>
+    </div>
+
+    <div class="tabs">
+      <button class="active" data-tab="live">实时</button>
+      <button data-tab="events">事件流</button>
+      <button data-tab="trace">流程监控</button>
+      <button data-tab="errors">错误</button>
+    </div>
+
+    <!-- ============ 实时视图 ============ -->
+    <div id="tab-live">
+      <div class="live-head">
+        <span id="livePhase" class="phase">待命</span>
+        <span id="liveMetrics">—</span>
+        <span class="grow"></span>
+        <label class="check" style="margin:0"><input type="checkbox" id="optAutoScroll" checked /> 自动滚动</label>
+        <label class="check" style="margin:0"><input type="checkbox" id="optDebug" /> 调试</label>
+      </div>
+      <div id="liveDiag" class="diag hide"></div>
+      <div class="live" id="live"></div>
+      <div class="live-foot"><button class="tobottom hide" id="toBottom">↓ 回到最新</button></div>
+    </div>
+
+    <!-- ============ 事件流（原始事件，调试用） ============ -->
+    <div id="tab-events" class="hide">
+      <p class="hint">持久化事件的原始列表（按 seq 递增）。文本增量（llm_delta）为临时事件，不落盘，因此这里看不到；它们只出现在「实时」视图与调试面板中。</p>
+      <div id="events"><div class="meta" style="color:#6b7280">事件将在此实时显示…</div></div>
+      <h3 style="margin:10px 0 6px">最终答案 / 来源</h3>
+      <div id="answer" class="answer">—</div>
+      <div id="sources"></div>
+      <div id="miscReport"></div>
+      <div id="orchReport"></div>
+    </div>
+
+    <!-- ============ 流程监控 ============ -->
+    <div id="tab-trace" class="hide">
+      <div id="traceSummary" class="stats"></div>
+      <div class="legend">
+        <span><i style="background:#16a34a"></i>整体</span>
+        <span><i style="background:#2563eb"></i>推理(LLM)</span>
+        <span><i style="background:#7c3aed"></i>工具调用</span>
+        <span><i style="background:#4f46e5"></i>子 Agent</span>
+        <span><i style="background:#d97706"></i>最终答案</span>
+        <span><i style="background:#dc2626"></i>失败</span>
+      </div>
+      <div class="trace-title">执行流程（推理 → 决策 → 工具调用 → 结果返回）</div>
+      <div class="flow" id="flow"></div>
+      <div class="trace-title">耗时分布（瀑布图）</div>
+      <div class="waterfall-wrap" id="waterfall"></div>
+    </div>
+
+    <!-- ============ 错误聚合（高频 TOP，按 code+location） ============ -->
+    <div id="tab-errors" class="hide">
+      <p class="hint">按「错误码 + 位置」聚合的高频错误 TOP（内存最近 200 条；完整落盘见 data/errors.log）。</p>
+      <div style="display:flex;gap:8px;align-items:center;margin:6px 0">
+        <button class="btn-ghost" type="button" id="errRefresh">刷新</button>
+        <span class="meta" id="errMeta" style="color:#6b7280">—</span>
+      </div>
+      <div id="errGroups"><div class="meta" style="color:#6b7280">暂无数据；切到本页签会自动拉取。</div></div>
+      <h3 style="margin:12px 0 6px">最近错误（原始）</h3>
+      <div id="errRecent"><div class="meta" style="color:#6b7280">—</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="inputbar">
+  <div style="min-width:160px">
+    <label>任务类型</label>
+    <select id="runType">
+      <option value="auto">自动分流（推荐）</option>
+      <option value="orchestrator">多 Agent 编排</option>
+      <option value="misc">Misc Agent（只读）</option>
+      <option value="codebase">Codebase Agent</option>
+      <option value="research">Research Agent</option>
+    </select>
+  </div>
+
+  <div class="rpbox" id="codebaseFields">
+    <label id="repoPathLabel">仓库 / 工作区路径</label>
+    <input id="repoPath" placeholder="demo/codebase-sample 或 D:/path/to/repo" value="demo/codebase-sample" />
+  </div>
+
+  <div class="goalbox">
+    <label>用户目标 <span id="routeNote" style="font-weight:400;color:var(--muted)"></span></label>
+    <textarea id="goal" placeholder="描述任务目标... 用 @相对路径 引用起点文件" rows="1">分析这个仓库的加法与字符串工具实现，并运行测试验证。</textarea>
+    <div id="ctxPills" class="ctx-pills"></div>
+  </div>
+
+  <div class="acts">
+    <button class="btn-primary" id="startBtn">开始任务</button>
+    <button class="btn-danger" id="cancelBtn" disabled>取消</button>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  // =========================================================================
+  // 前端错误上报：让「界面不更新 / 点了没反应」这类静默失效也能被记录
+  // （上报到 /api/client-errors，与服务端错误共用同一份报告与日志）
+  // =========================================================================
+  function reportClientError(phase, message, stack, extra) {
+    try {
+      fetch('/api/client-errors', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        keepalive: true,
+        body: JSON.stringify({
+          phase, message: String(message ?? ''), stack: String(stack ?? ''),
+          url: location.href, userAgent: navigator.userAgent,
+          runId: (typeof currentId !== 'undefined' && currentId) || undefined,
+          ...(extra || {}),
+        }),
+      }).catch(() => {});
+    } catch { /* 上报失败也不能影响页面 */ }
+    showClientErrorBanner(message);
+  }
+  function showClientErrorBanner(message) {
+    let bar = document.getElementById('clientErrorBar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'clientErrorBar';
+      bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#7f1d1d;color:#fff;' +
+        'padding:8px 12px;font-size:12px;display:flex;gap:10px;align-items:center;box-shadow:0 -2px 8px rgba(0,0,0,.2)';
+      document.body.appendChild(bar);
+    }
+    bar.innerHTML = '<b>⚠️ 界面出现脚本错误（已上报服务端）</b> <span style="opacity:.9"></span> ' +
+      '<button style="margin-left:auto;background:#fff;color:#7f1d1d;border:0;border-radius:6px;padding:3px 8px;cursor:pointer">关闭</button>' +
+      '<a href="/api/errors?source=client" target="_blank" style="color:#fff;text-decoration:underline">查看错误报告</a>';
+    bar.querySelector('span').textContent = String(message ?? '').slice(0, 200);
+    bar.querySelector('button').onclick = () => bar.remove();
+  }
+  window.addEventListener('error', (e) => {
+    reportClientError('window.onerror', e.message, e.error && e.error.stack, { line: e.lineno, column: e.colno });
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason || {};
+    reportClientError('unhandledrejection', r.message || String(r), r.stack);
+  });
+  let es = null, currentId = null, serverCfg = {};
+  let traceDirty = false, traceTimer = null;
+
+  /** 编排汇总报告：摘要 + 子任务统计 + findings + 冲突 + 未解决项 */
+  function renderOrchestrationReport(r, runId) {
+    const box = $('orchReport');
+    const orch = r.orchestration;
+    if (!orch) { box.innerHTML = ''; return; }
+    const sub = r.subtasks || [];
+    const st = orch.subtasks || { total: 0, ok: 0, failed: 0, cancelled: 0, limited: 0, ids: [] };
+    // 2026-10-16 口径修正：三类非 ok 子任务分开显示（limit_reached 原先并进 cancelled，会看起来像「0 失败」）
+    const limited = st.limited ?? 0;
+    const gapsTotal = orch.gaps?.total ?? ((st.failed ?? 0) + (st.cancelled ?? 0) + limited + (orch.unresolved || []).length);
+
+    const subRows = sub.map((s) => {
+      const statusText = { ok: '✅', failed: '❌', cancelled: '⛔', limit_reached: '⏱️' }[s.status] || '·';
+      const flags = [
+        s.report?.confidence ? `置信度 ${s.report.confidence}` : '',
+        s.report?.evidence?.length ? `证据 ${s.report.evidence.length}` : '',
+        s.contractViolation ? '⚠️ 未按契约上报' : '',
+        (s.truncatedFields || []).length ? `截断 ${s.truncatedFields.length} 项` : '',
+      ].filter(Boolean).join(' · ');
+      return `<div class="osub">${statusText} <code>${escapeHtml(s.specId)}</code>｜${escapeHtml(s.objective.slice(0, 60))}` +
+        `<br/>${fmtMs(s.durationMs)} · ${s.modelCalls} 次模型调用 · ${s.usage?.totalTokens ?? 0} tokens${flags ? ` · ${escapeHtml(flags)}` : ''}` +
+        `${s.report?.summary ? `<br/>结论：${escapeHtml(s.report.summary.slice(0, 200))}` : ''}` +
+        `${s.failureReason ? `<br/><span style="color:#b91c1c">失败：${escapeHtml(s.failureReason.slice(0, 160))}</span>` : ''}</div>`;
+    }).join('');
+
+    const findings = (orch.findings || []).map((f) =>
+      `<div class="ofind">· [${escapeHtml(f.from)}] ${escapeHtml(f.note)}${f.path ? ` <code>${escapeHtml(f.path)}</code>` : ''}</div>`).join('');
+    const conflicts = (orch.conflicts || []).map((c) =>
+      `<div class="oconflict">⚡ 冲突（${escapeHtml((c.between || []).join(' vs '))}）：${escapeHtml(c.topic)}<br/>处理：${escapeHtml(c.resolution)}</div>`).join('');
+    const unresolved = (orch.unresolved || []).map((u) => `<div class="ounresolved">⚠️ ${escapeHtml(u)}</div>`).join('');
+
+    const escalate = orch.escalateTo
+      ? `<div class="oconflict">建议改派：<b>${escapeHtml(orch.escalateTo)}</b> — ${escapeHtml(orch.escalateReason || '')}</div>`
+      : '';
+
+    const partialBanner = orch.partial
+      ? `<div class="oconflict" style="border-color:#dc2626;background:#fef2f2;color:#991b1b">` +
+        `<b>⚠️ 部分成功（partial）</b>：${st.failed} 个失败、${st.cancelled} 个被取消、${limited} 个被限流截断` +
+        `——任务状态是 completed，但**结论只覆盖成功的那部分**，请先看下方 unresolved 再决定是否采信。</div>`
+      : '';
+    box.innerHTML =
+      `<div class="orch-report">` +
+        `<h3>${orch.structured ? '编排汇总报告' : '编排结论（未结构化：主 Agent 未调用 submit_orchestration）'}${orch.partial ? ' ⚠️ 部分成功' : ''}</h3>` +
+        partialBanner +
+        `<div class="srow"><b>总体结论</b><span>${escapeHtml(orch.summary)}</span></div>` +
+        `<div style="margin:6px 0"><span class="substat">子任务 ${st.total}</span>` +
+          `<span class="substat" style="color:#15803d">成功 ${st.ok}</span>` +
+          `<span class="substat" style="color:#b91c1c">失败 ${st.failed}</span>` +
+          `<span class="substat" style="color:#b45309">取消 ${st.cancelled}</span>` +
+          (limited ? `<span class="substat" style="color:#b45309">限流截断 ${limited}</span>` : '') +
+          (gapsTotal ? `<span class="substat" style="color:#b91c1c" title="非 ok 子任务 + 未解决问题">缺口 ${gapsTotal}</span>` : '') + `</div>` +
+        (findings ? `<div style="margin-top:6px">${findings}</div>` : '') +
+        conflicts + unresolved + escalate +
+        (subRows ? `<div style="margin-top:8px"><b style="font-size:12px">子任务明细（id=${escapeHtml(runId)}）</b>${subRows}</div>` : '') +
+      `</div>`;
+  }
+
+  // ---------------------------------------------------------------
+  // 任务类型：自动分流 + 杂项（misc）边界 + 多 Agent 编排
+  // ---------------------------------------------------------------
+  let lastRouting = null;
+
+  /**
+   * 需要「仓库/工作区路径」的任务类型——**集中定义一处**。
+   * 教训：这个列表原先写了两处（字段显隐 + 提交时收集），新增 orchestrator 时只改了一处，
+   * 结果"界面填了路径但请求里没带" → 服务端 400「orchestrator 任务必须提供 repoPath」。
+   * 同源后这类漏改不会再发生。
+   */
+  const NEEDS_WORKSPACE = ['codebase', 'misc', 'orchestrator'];
+
+  function isAuto() { return $('runType').value === 'auto'; }
+  function isMisc() { return $('runType').value === 'misc'; }
+  function isOrchestrator() { return $('runType').value === 'orchestrator'; }
+
+  /** 加载子 Agent 契约清单（单一事实来源：/api/agents/specs） */
+  let agentSpecsLoaded = false;
+  async function loadAgentSpecs() {
+    if (agentSpecsLoaded) return;
+    try {
+      const data = await (await fetch('/api/agents/specs')).json();
+      const specs = data.specs || [];
+      $('orchSpecList').innerHTML = specs
+        .map((sp) => `<code>${escapeHtml(sp.id)}</code>（${escapeHtml(sp.title)}：${escapeHtml(sp.responsibilities.slice(0, 40))}…）`)
+        .join(' · ');
+      const issues = (data.issues || []).filter((i) => i.level === 'error');
+      if (issues.length) {
+        $('orchSpecList').innerHTML += `<br/><b style="color:#dc2626">⚠️ 契约错误 ${issues.length} 项：${escapeHtml(issues.map((i) => i.message).join('；'))}</b>`;
+      }
+      agentSpecsLoaded = true;
+    } catch {
+      $('orchSpecList').textContent = '（加载失败，可直接开始任务）';
+    }
+  }
+
+  /** 当前实际要提交的 runType（自动分流时用上次的建议，兜底 misc 试探） */
+  function effectiveRunType() {
+    if (!isAuto()) return $('runType').value;
+    return lastRouting ? lastRouting.runType : 'misc';
+  }
+
+  function showFields() {
+    const t = $('runType').value;
+    // auto 也要显示（它可能被分流到需要工作区的 Agent）
+    const needWorkspace = t === 'auto' || NEEDS_WORKSPACE.includes(t);
+    $('codebaseFields').classList.toggle('hide', !needWorkspace);
+    $('researchFields').classList.toggle('hide', t !== 'research');
+    $('miscFields').classList.toggle('hide', t !== 'misc');
+    $('orchestrationFields').classList.toggle('hide', t !== 'orchestrator');
+    if (t === 'orchestrator') { loadAgentSpecs(); }
+    $('repoPathLabel').textContent = t === 'misc' ? '工作区路径 (repoPath，只读边界)' : '仓库 / 工作区路径 (repoPath)';
+    if (t === 'misc') applyMiscDefaults();
+    else restoreLimitsFromMisc(); // 关键：离开 misc 就恢复预算，避免污染其它任务
+    if (!isAuto()) { lastRouting = null; $('routeNote').textContent = ''; }
+    else scheduleRoute();
+  }
+
+  /**
+   * 杂项任务：把预算收紧到默认值（用户仍可手动改大，但 Runtime 有硬上限）。
+   * ⚠️ 必须可恢复：早期实现只收紧不恢复，用户一旦选过 misc，
+   * 之后所有任务（含真实 LLM 的编排/代码任务）都会被压到 5 万 token 预算而中途 limit_reached
+   * —— 这正是"多 Agent 跑不起来"的真实原因之一。
+   */
+  const PRISTINE_LIMITS = { maxSteps: '12', maxModelCalls: '20', maxToolCalls: '40', tokenBudget: '200000' };
+  let miscLimitsApplied = false;
+  function applyMiscDefaults() {
+    if (!$('maxSteps').dataset.touched) $('maxSteps').value = '6';
+    if (!$('maxModelCalls').dataset.touched) $('maxModelCalls').value = '6';
+    if (!$('maxToolCalls').dataset.touched) $('maxToolCalls').value = '10';
+    if (!$('tokenBudget').dataset.touched) $('tokenBudget').value = '50000';
+    miscLimitsApplied = true;
+  }
+  /** 离开 misc 时把被自动收紧的预算恢复回默认值（用户手动改过的不动） */
+  function restoreLimitsFromMisc() {
+    if (!miscLimitsApplied) return;
+    for (const [id, v] of Object.entries(PRISTINE_LIMITS)) {
+      const el = $(id);
+      if (el && !el.dataset.touched) el.value = v;
+    }
+    miscLimitsApplied = false;
+  }
+
+  let routeTimer = null;
+  function scheduleRoute() {
+    if (routeTimer) clearTimeout(routeTimer);
+    routeTimer = setTimeout(fetchRouting, 450);
+  }
+
+  /** 自动分流：调用服务端的规则式分流器（不消耗 LLM） */
+  async function fetchRouting() {
+    const goal = $('goal').value.trim();
+    const note = $('routeNote');
+    if (!goal) { note.textContent = '填写「用户目标」后会自动推荐处理该任务的 Agent。'; return; }
+    let data = null;
+    try {
+      data = await (await fetch('/api/task-router?goal=' + encodeURIComponent(goal))).json();
+    } catch { /* 忽略网络错误 */ }
+    if (!data || data.error) { note.textContent = '分流建议获取失败（可直接手动选任务类型）。'; return; }
+    lastRouting = data;
+    const label = { misc: 'Misc Agent（杂项，只读）', codebase: 'Codebase Agent', research: 'Research Agent', orchestrator: '多 Agent 编排' }[data.runType] || data.runType;
+    const humanWarn = data.requiresHuman
+      ? `<br/><b style="color:#b45309">🛑 该目标包含破坏性动作：本项目没有写/删工具，任何 Agent 都不会执行，需人工确认。</b>`
+      : '';
+    note.innerHTML =
+      `🎯 建议交给 <b>${escapeHtml(label)}</b>` +
+      `（置信度 ${escapeHtml(data.confidence)}）· ${escapeHtml(data.reason)}` +
+      (data.signals && data.signals.length ? `<br/>命中信号：${escapeHtml(data.signals.join('、'))}` : '') +
+      humanWarn;
+    if (data.runType === 'misc') applyMiscDefaults();
+  }
+
+  ['maxSteps', 'maxModelCalls', 'maxToolCalls', 'tokenBudget'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => { el.dataset.touched = '1'; });
+  });
+
+  /** 渲染杂项结构化报告（含「一键改派」） */
+  function renderMiscReport(misc, runId, goal, runType) {
+    const box = $('miscReport');
+    if (!misc) { box.innerHTML = ''; return; }
+    const cls = misc.structured ? 'misc-report' : 'misc-report misc-unstructured';
+    const items = (misc.items || []).map((it) =>
+      `<div class="mi"><b>${escapeHtml(it.label)}</b><span>${escapeHtml(String(it.value))}${it.detail ? ' · ' + escapeHtml(it.detail) : ''}</span></div>`).join('');
+    const findings = (misc.findings || []).map((f) =>
+      `<div class="mf">· <code>${escapeHtml(f.path)}</code> — ${escapeHtml(f.note)}</div>`).join('');
+    const artifacts = (misc.artifacts || []).map((a) =>
+      `<details><summary>${escapeHtml(a.label)}</summary><pre>${escapeHtml(a.content)}</pre></details>`).join('');
+
+    let escalate = '';
+    if (misc.escalateTo) {
+      const label = { codebase: 'Codebase Agent', research: 'Research Agent', human: '人工处理' }[misc.escalateTo];
+      escalate = `<div class="escalate">⚠️ 该任务超出杂项 Agent 的能力边界，建议改派给 <b>${escapeHtml(label)}</b>。<br/>理由：${escapeHtml(misc.escalateReason || '（未说明）')}</div>`;
+      if (misc.escalateTo !== 'human') {
+        escalate += `<button class="btn-primary escbtn" id="escalateBtn">一键改派给 ${escapeHtml(label)}</button>`;
+      } else {
+        escalate += `<div class="escbtn hint">涉及破坏性操作时本项目不自动执行，请人工确认后自行处理。</div>`;
+      }
+    }
+
+    box.innerHTML =
+      `<div class="${cls}">` +
+        `<h3>${misc.structured ? '杂项结构化结论' : '杂项结论（未结构化，模型未调用 submit_result）'}</h3>` +
+        `<div class="mi"><b>结论</b><span>${escapeHtml(misc.summary)}</span></div>` +
+        (items ? `<div style="margin-top:6px">${items}</div>` : '') +
+        (findings ? `<div style="margin-top:6px">${findings}</div>` : '') +
+        (artifacts ? `<div style="margin-top:6px">${artifacts}</div>` : '') +
+        escalate +
+      `</div>`;
+
+    const escBtn = $('escalateBtn');
+    if (escBtn) {
+      escBtn.onclick = () => {
+        $('runType').value = misc.escalateTo;
+        $('goal').value = goal;
+        showFields();
+        $('routeNote').textContent = `已按杂项 Agent 的建议把任务类型切到 ${misc.escalateTo}，点「开始任务」即可改派（原任务 runId=${runId}）。`;
+        $('startBtn').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
+    }
+  }
+  $('runType').onchange = () => { showFields(); persistWorkspacePrefs(); };
+  $('repoPath').addEventListener('change', persistWorkspacePrefs);
+  $('goal').addEventListener('input', () => { if (isAuto()) scheduleRoute(); });
+  showFields();
+
+  // ---------------------------------------------------------------
+  // LLM 配置：预设（Provider / 模型 / Base URL）+ 生成参数 + 连接测试
+  // 说明：预设与参数元数据都来自服务端（/api/llm/presets），避免前后端各维护一份。
+  // ---------------------------------------------------------------
+  let presets = [];        // Provider 预设
+  let paramMeta = [];      // 参数元数据（范围/说明）
+  let currentPreset = null;
+
+  function presetById(id) { return presets.find((p) => p.id === id); }
+  function paramByKey(k) { return paramMeta.find((m) => m.key === k); }
+
+  function fillSelect(el, items, selected) {
+    el.innerHTML = items.map((o) =>
+      `<option value="${escapeHtml(o.value)}"${String(o.value) === String(selected) ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
+  }
+
+  function renderProviderOptions() {
+    fillSelect($('llmProvider'), presets.map((p) => ({ value: p.id, label: p.label })), $('llmProvider').value || currentPreset?.id);
+  }
+
+  /** 模型下拉：预设给候选清单，最后一项是「自定义模型…」 */
+  function renderModelOptions(keepValue) {
+    const p = presetById($('llmProvider').value) || currentPreset;
+    currentPreset = p || null;
+    if (!p) return;
+    const opts = p.models.map((m) => ({ value: m.id, label: m.label }));
+    opts.push({ value: '__custom__', label: '自定义模型…' });
+    const knownIds = p.models.map((m) => m.id);
+    const isKnown = keepValue && knownIds.includes(keepValue);
+    fillSelect($('llmModel'), opts, isKnown ? keepValue : (p.defaultModel || (opts[0] && opts[0].value)));
+    if (keepValue && !isKnown) {
+      // 之前存的是自定义模型：保留手填值
+      $('llmModel').value = '__custom__';
+      $('llmModelCustom').value = keepValue;
+    }
+    toggleModelCustom();
+    syncBaseUrl();
+    renderPresetNotes();
+  }
+
+  function currentModel() {
+    return $('llmModel').value === '__custom__' ? $('llmModelCustom').value.trim() : $('llmModel').value;
+  }
+  function toggleModelCustom() {
+    $('llmModelCustom').classList.toggle('hide', $('llmModel').value !== '__custom__');
+  }
+
+  /** Base URL：按预设自动带出；用户手改过（或选自定义）则不再覆盖 */
+  function syncBaseUrl() {
+    const p = currentPreset;
+    if (!p) return;
+    if (p.id !== 'custom' && !$('llmBaseUrl').dataset.touched) $('llmBaseUrl').value = p.baseUrl || '';
+    $('baseUrlNote').textContent = p.id === 'custom'
+      ? '自定义服务商：请填写 OpenAI 兼容的 Base URL（形如 https://your-host/v1）。'
+      : `已按「${p.label}」预设自动填写；手动改动后不会被预设覆盖。`;
+  }
+
+  function renderPresetNotes() {
+    const p = currentPreset;
+    if (!p) return;
+    $('providerNote').textContent = p.notes || '';
+    $('llmKeyEnvName').textContent = p.apiKeyEnv || '—';
+    const flag = $('envLlmFlag');
+    const configured = !!(p.keyOptional || p.envKeyConfigured);
+    flag.textContent = configured ? '已配置（界面留空则沿用）' : '未配置（需在界面填写）';
+    flag.className = 'envflag' + (configured ? '' : ' no');
+    $('llmKeyLink').innerHTML = p.apiKeyUrl
+      ? ` · <a href="${escapeHtml(p.apiKeyUrl)}" target="_blank" rel="noopener">申请 Key</a>`
+      : '';
+    const model = p.models.find((m) => m.id === currentModel());
+    $('modelNote').textContent = model
+      ? [model.notes,
+         model.contextTokens ? `上下文 ${model.contextTokens} tokens` : '',
+         model.maxOutputTokens ? `最大输出 ${model.maxOutputTokens}` : ''].filter(Boolean).join(' · ')
+      : (p.id === 'custom' ? '请填写服务商文档中的模型 ID（例如 deepseek-flash）。' : '');
+  }
+
+  /** 参数说明（服务端 PARAM_META 为单一事实来源） */
+  function renderParamHelp() {
+    $('paramHelp').innerHTML = paramMeta.map((m) => {
+      const range = m.type === 'number' ? `（${m.min}~${m.max}${m.suggest ? '，' + m.suggest : ''}）` : '';
+      return `<div style="margin-top:4px"><b>${escapeHtml(m.label)}</b>${escapeHtml(range)}：${escapeHtml(m.help)}</div>`;
+    }).join('');
+  }
+
+  function initParamControls() {
+    const mk = (key, elId) => {
+      const meta = paramByKey(key);
+      if (!meta || meta.type !== 'enum') return;
+      fillSelect($(elId), meta.enumValues.map((v) => ({ value: v.value, label: v.label })), '');
+    };
+    mk('thinking', 'llmThinking');
+    mk('reasoningEffort', 'llmEffort');
+  }
+
+  /** 收集生成参数（留空 = 不发送该字段，由厂商默认值决定） */
+  function collectParams() {
+    const params = {};
+    const num = (id) => { const v = $(id).value.trim(); return v === '' ? undefined : Number(v); };
+    const maxTokens = num('llmMaxTokens'); if (maxTokens !== undefined) params.maxTokens = maxTokens;
+    const temperature = num('llmTemperature'); if (temperature !== undefined) params.temperature = temperature;
+    const topP = num('llmTopP'); if (topP !== undefined) params.topP = topP;
+    const fp = num('llmFreqPenalty'); if (fp !== undefined) params.frequencyPenalty = fp;
+    const pp = num('llmPresPenalty'); if (pp !== undefined) params.presencePenalty = pp;
+    if ($('llmThinking').value) params.thinking = $('llmThinking').value;
+    if ($('llmEffort').value) params.reasoningEffort = $('llmEffort').value;
+    return params;
+  }
+
+  function applyParams(params) {
+    const set = (id, v) => { $(id).value = v === undefined || v === null ? '' : String(v); };
+    set('llmMaxTokens', params.maxTokens); set('llmTemperature', params.temperature); set('llmTopP', params.topP);
+    set('llmFreqPenalty', params.frequencyPenalty); set('llmPresPenalty', params.presencePenalty);
+    $('llmThinking').value = params.thinking || '';
+    $('llmEffort').value = params.reasoningEffort || '';
+  }
+
+  function toggleApiFields() {
+    $('realLlmFields').classList.toggle('hide', $('llmMode').value !== 'openai');
+    $('serperFields').classList.toggle('hide', $('searchProvider').value !== 'serper');
+    updateModeNote();
+  }
+
+  function updateModeNote() {
+    const sp = $('searchProvider').value;
+    let txt;
+    if ($('llmMode').value === 'openai') {
+      const p = currentPreset;
+      const params = collectParams();
+      txt = `当前 LLM：${p ? p.label : '真实接口'} · ${currentModel() || '(未选模型)'}` +
+        `${params.thinking ? ` · thinking=${params.thinking}` : ''}${params.reasoningEffort ? `(${params.reasoningEffort})` : ''}` +
+        `${params.temperature !== undefined ? ` · temp=${params.temperature}` : ''}` +
+        `${params.maxTokens !== undefined ? ` · max_tokens=${params.maxTokens}` : ''}` +
+        ` · 共 ${Object.keys(params).length} 个生成参数`;
+    } else {
+      txt = '当前 LLM：Mock 模式（无需 Key）· 结果明确标注为模拟 · 生成参数不生效（Mock 不调用真实模型）';
+    }
+    txt += sp === 'serper' ? '；搜索：Serper 真实联网。' : '；搜索：OFFLINE_MOCK 离线资料。';
+    txt += $('liveDeltas').checked ? '；实时流式：开。' : '；实时流式：关（无文本增量）。';
+    $('modeNote').textContent = txt;
+  }
+
+  /** 回显「服务端实际生效」的 LLM 配置（含被忽略的参数），避免以为参数生效了其实没有 */
+  function renderEffectiveLlm(llm) {
+    if (!llm) return;
+    const box = $('testResult');
+    if (!box) return;
+    const parts = [];
+    parts.push(`本次生效：${llm.presetLabel} · ${llm.model}${llm.baseUrl ? ' · ' + llm.baseUrl : ''} · Key ${llm.hasKey ? '已使用' : '未使用'}`);
+    const p = llm.params && Object.keys(llm.params).length ? JSON.stringify(llm.params) : '（无生成参数）';
+    parts.push(`参数：${p}`);
+    if (llm.droppedParams && llm.droppedParams.length) {
+      parts.push(`⚠️ 被忽略的参数：${llm.droppedParams.join(', ')}（当前模型不支持，或思考模式下无效）`);
+    }
+    if (llm.presetId === 'mock') parts.push('提示：Mock 模式下生成参数不会生效。');
+    box.className = 'note info';
+    box.classList.remove('hide');
+    box.innerHTML = parts.map((x) => escapeHtml(x)).join('<br/>');
+  }
+
+  async function loadServerConfig() {
+    try { serverCfg = await (await fetch('/api/config')).json(); } catch { serverCfg = {}; }
+    try {
+      const data = await (await fetch('/api/llm/presets')).json();
+      presets = data.presets || [];
+      paramMeta = data.params || [];
+    } catch { presets = []; paramMeta = []; }
+
+    renderProviderOptions();
+    initParamControls();
+    renderParamHelp();
+
+    const envPresetId = serverCfg.llmPresetId || (presets[0] ? presets[0].id : 'deepseek');
+    $('llmProvider').value = presetById(envPresetId) ? envPresetId : (presets[0] ? presets[0].id : 'deepseek');
+    renderModelOptions(null);
+    applyParams({});
+    $('llmMode').value = serverCfg.llmMode === 'openai' ? 'openai' : 'mock';
+
+    $('searchProvider').value = serverCfg.searchProvider === 'serper' ? 'serper' : 'offline';
+    if (serverCfg.stream && typeof serverCfg.stream.liveDeltas === 'boolean') $('liveDeltas').checked = serverCfg.stream.liveDeltas;
+    const sf = $('envSearchFlag');
+    sf.textContent = serverCfg.hasSearchKey ? '已配置（界面留空则沿用）' : '未配置（需在界面填写）';
+    sf.className = 'envflag' + (serverCfg.hasSearchKey ? '' : ' no');
+
+    // 写能力（M1'）：部署禁用（CODEBASE_WRITE_ENABLED=false）时锁定开关并说明原因——门禁状态可见
+    const wcb = $('allowWriteSpecs');
+    if (wcb) {
+      const writeOk = serverCfg.writeEnabled !== false;   // 旧服务端无此字段 → 按可用处理
+      wcb.disabled = !writeOk;
+      if (!writeOk) wcb.checked = false;
+      const wdn = $('writeDisabledNote');
+      if (wdn) wdn.classList.toggle('hide', writeOk);
+    }
+
+    restoreRemembered();
+    toggleApiFields();
+    updateModeNote();
+  }
+
+  $('llmMode').onchange = toggleApiFields;
+  $('searchProvider').onchange = toggleApiFields;
+  $('liveDeltas').onchange = updateModeNote;
+
+  // M1'：写能力开关联动——白名单非空且不含 code-edit 时给出可见警示（此时勾选也不会生效）
+  function syncWriteWhitelistNote() {
+    const cb = $('allowWriteSpecs');
+    const wl = $('orchSpecs');
+    const note = $('writeWhitelistNote');
+    if (!cb || !wl || !note) return;
+    const list = wl.value.trim() ? wl.value.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    note.classList.toggle('hide', !(cb.checked && list.length > 0 && !list.includes('code-edit')));
+  }
+  $('allowWriteSpecs').addEventListener('change', syncWriteWhitelistNote);
+  $('orchSpecs').addEventListener('input', syncWriteWhitelistNote);
+  $('llmProvider').onchange = () => { delete $('llmBaseUrl').dataset.touched; renderModelOptions(null); updateModeNote(); };
+  $('llmModel').onchange = () => { toggleModelCustom(); renderPresetNotes(); updateModeNote(); };
+  $('llmModelCustom').oninput = () => { renderPresetNotes(); updateModeNote(); };
+  $('llmBaseUrl').oninput = () => { $('llmBaseUrl').dataset.touched = '1'; updateModeNote(); };
+  ['llmMaxTokens', 'llmTemperature', 'llmTopP', 'llmFreqPenalty', 'llmPresPenalty', 'llmThinking', 'llmEffort', 'llmApiKey', 'tokenBudget', 'costBudget']
+    .forEach((id) => {
+      $(id).addEventListener('input', updateModeNote);
+      $(id).addEventListener('change', updateModeNote);
+    });
+
+  const LS = {
+    remember: 'mta_rememberKeys',
+    keysByProvider: 'mta_keys',        // { [presetId]: key }
+    params: 'mta_params',
+    llmForm: 'mta_llmForm',            // { mode, provider, model, baseUrl, tokenBudget, costBudget }
+    conversations: 'mta_conversations', // 历史对话（本机）；后端 ContextStore 为权威持久层
+    lastSession: 'mta_lastSession',     // 上次会话 runId（恢复用）
+    finalized: 'mta_finalizedRuns',     // 已补录结论/入库的 runId 集合（幂等防重）
+    repoPath: 'mta_repoPath',           // 上次填写的仓库/工作区路径（自动回填）
+    runType: 'mta_runType',             // 上次选择的任务类型（自动回填）
+  };
+
+  function loadLs(key, fallback) {
+    try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
+  }
+  function saveLs(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 忽略（隐私模式等） */ }
+  }
+
+  /** 按「勾选保存」决定是否把 Key / 参数写进本机 localStorage */
+  function persistKeysIfNeeded() {
+    try {
+      if ($('rememberKeys').checked) {
+        localStorage.setItem(LS.remember, '1');
+        const keys = loadLs(LS.keysByProvider, {});
+        const k = $('llmApiKey').value.trim();
+        if (k) keys[$('llmProvider').value] = k; else delete keys[$('llmProvider').value];
+        saveLs(LS.keysByProvider, keys);
+        saveLs(LS.params, collectParams());
+        saveLs(LS.llmForm, {
+          mode: $('llmMode').value,
+          provider: $('llmProvider').value,
+          model: currentModel(),
+          baseUrl: $('llmBaseUrl').value.trim(),
+          tokenBudget: $('tokenBudget').value,
+          costBudget: $('costBudget').value,
+        });
+        localStorage.setItem('mta_serperKey', $('serperKey').value);
+      } else {
+        localStorage.removeItem(LS.remember);
+        localStorage.removeItem(LS.keysByProvider);
+        localStorage.removeItem(LS.params);
+        localStorage.removeItem(LS.llmForm);
+        localStorage.removeItem('mta_serperKey');
+      }
+    } catch { /* 忽略 */ }
+  }
+
+  function restoreRemembered() {
+    try {
+      if (localStorage.getItem(LS.remember) === '1') {
+        $('rememberKeys').checked = true;
+        const form = loadLs(LS.llmForm, null);
+        if (form) {
+          if (presetById(form.provider)) { $('llmProvider').value = form.provider; renderModelOptions(form.model || null); }
+          if (form.mode) $('llmMode').value = form.mode;
+          if (form.baseUrl) { $('llmBaseUrl').value = form.baseUrl; $('llmBaseUrl').dataset.touched = '1'; }
+          if (form.tokenBudget !== undefined) $('tokenBudget').value = form.tokenBudget;
+          if (form.costBudget !== undefined) $('costBudget').value = form.costBudget;
+        }
+        applyParams(loadLs(LS.params, {}) || {});
+        const keys = loadLs(LS.keysByProvider, {});
+        if (keys[$('llmProvider').value]) $('llmApiKey').value = keys[$('llmProvider').value];
+        $('serperKey').value = localStorage.getItem('mta_serperKey') || '';
+      }
+    } catch { /* 忽略 */ }
+  }
+
+  // 参数预设按钮：精确 / 平衡 / 创意（temperature 为主，top_p 交回厂商默认）
+  document.querySelectorAll('[data-param-preset]').forEach((btn) => {
+    btn.onclick = () => {
+      const p = btn.dataset.paramPreset;
+      if (p === 'precise') { $('llmTemperature').value = '0'; $('llmTopP').value = ''; }
+      if (p === 'balanced') { $('llmTemperature').value = '1'; $('llmTopP').value = ''; }
+      if (p === 'creative') { $('llmTemperature').value = '1.5'; $('llmTopP').value = ''; }
+      updateModeNote();
+    };
+  });
+  $('resetParamsBtn').onclick = () => { applyParams({}); updateModeNote(); };
+
+  /** 测试连接：用当前表单里的 Key / Base URL / 模型真实请求一次（会消耗极少 token 或不消耗） */
+  $('testBtn').onclick = async () => {
+    const box = $('testResult');
+    box.className = 'note info';
+    box.classList.remove('hide');
+    box.textContent = '正在测试连接…';
+    const body = {
+      provider: $('llmProvider').value,
+      baseUrl: $('llmBaseUrl').value.trim() || undefined,
+      apiKey: $('llmApiKey').value.trim() || undefined,
+      model: currentModel() || undefined,
+    };
+    let res;
+    try {
+      res = await fetch('/api/llm/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    } catch (e) {
+      box.className = 'note';
+      box.textContent = '网络错误: ' + e.message;
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    const lines = [];
+    lines.push(`${data.ok ? '✅ 连接成功' : '❌ 连接失败'}（方式: ${data.method || '-'}${data.status ? '，HTTP ' + data.status : ''}${data.latencyMs != null ? '，' + data.latencyMs + 'ms' : ''}）`);
+    if (data.detail) lines.push(data.detail);
+    if (data.target) lines.push(`目标: ${data.target.baseUrl} · ${data.target.model || '(未指定模型)'} · Key ${data.target.hasKey ? '已提供' : '未提供'}`);
+    if (data.models && data.models.length) {
+      lines.push(`可用模型(${data.models.length}): ${data.models.slice(0, 12).join(', ')}${data.models.length > 12 ? ' …' : ''}`);
+    }
+    if (data.modelAvailable === false) lines.push('⚠️ 当前模型不在返回的模型列表中，请确认模型名是否正确');
+    box.className = 'note' + (data.ok ? ' info' : '');
+    box.innerHTML = lines.map((l) => escapeHtml(l)).join('<br/>');
+  };
+
+  // 所有表单与函数就绪后再初始化（避免 const 声明在使用前未初始化的 TDZ 问题）
+  loadServerConfig();
+
+  function renderStatus(status, extra) {
+    const cls = ['running','completed','failed','limit_reached','cancelled','awaiting_user'].includes(status) ? status : '';
+    const tail = extra ? ` <span class="pill failed">${escapeHtml(extra)}</span>` : '';
+    $('statusLine').innerHTML = `<span class="pill ${cls}">${status || '未开始'}</span>${tail}`;
+    updatePendingBadge();   // 本函数会重写 innerHTML，重写后补挂「待审批 N」徽标（有挂起审批时保持可见）
+  }
+  function renderStats(r) {
+    if (!r) { $('stats').innerHTML = ''; return; }
+    $('stats').innerHTML = `
+      <div class="stat"><b>${r.steps}</b><span>步骤</span></div>
+      <div class="stat"><b>${r.modelCalls}</b><span>模型调用</span></div>
+      <div class="stat"><b>${r.toolCalls}</b><span>工具调用</span></div>
+      <div class="stat"><b>${r.totalDurationMs}ms</b><span>总耗时</span></div>
+      <div class="stat"><b>${r.usage?.totalTokens ?? 0}</b><span>Tokens${r.usage?.tokensEstimated ? '(估)' : ''}</span></div>
+      <div class="stat"><b>$${ (r.usage?.costUsd ?? 0).toFixed(5) }</b><span>费用(估)</span></div>`;
+  }
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function fmtMs(v) {
+    if (v == null || !isFinite(v)) return '';
+    return v >= 1000 ? (v / 1000).toFixed(2) + 's' : (+v.toFixed(1)) + 'ms';
+  }
+
+  // =========================================================================
+  // 实时视图（Live）：思考文本流式渲染 + 工具调用卡片 + 诊断面板
+  // =========================================================================
+  const LIVE = {
+    cards: new Map(),      // key -> card 元素
+    raf: 0,
+    stick: true,
+    lastSeq: 0,
+    runStartedAt: 0,
+    tick: null,
+    phase: 'idle',
+    debug: false,
+    conn: 'idle',
+    frames: [],            // 调试面板最近帧
+    lastFrameAt: 0,
+    counts: { frames: 0, ephemeral: 0, replay: 0, live: 0, tools: 0, toolsFailed: 0, llm: 0 },
+    meta: null,
+    polling: null,
+  };
+
+  const liveRoot = () => $('live');
+
+  function isAtBottom() {
+    const el = liveRoot();
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }
+  function scrollBottom(force) {
+    const el = liveRoot();
+    if (force || LIVE.stick || $('optAutoScroll').checked) {
+      el.scrollTop = el.scrollHeight;
+      $('toBottom').classList.add('hide');
+    }
+  }
+  liveRoot().addEventListener('scroll', () => {
+    LIVE.stick = isAtBottom();
+    $('toBottom').classList.toggle('hide', LIVE.stick);
+  });
+  $('toBottom').onclick = () => { scrollBottom(true); LIVE.stick = true; };
+  $('optDebug').onchange = () => {
+    LIVE.debug = $('optDebug').checked;
+    $('liveDiag').classList.toggle('hide', !LIVE.debug);
+    document.querySelectorAll('#live .lraw').forEach((el) => el.classList.toggle('hide', !LIVE.debug));
+    renderDiag();
+  };
+
+  function setPhase(text, cls) {
+    LIVE.phase = cls;
+    const el = $('livePhase');
+    el.textContent = text;
+    el.className = 'phase ' + cls;
+  }
+
+  /** 创建卡片骨架，返回卡片元素（refs 挂在 _refs 上） */
+  function mkCard(key, kind, title, sub) {
+    const el = document.createElement('div');
+    el.className = 'lcard ' + kind;
+    el.dataset.key = key;
+    el.innerHTML =
+      '<div class="lhead">' +
+        '<span class="ltitle">' + escapeHtml(title) + '</span>' +
+        '<span class="lsub">' + escapeHtml(sub || '') + '</span>' +
+        '<span class="grow"></span>' +
+        '<span class="lstatus wait">待命</span>' +
+        '<span class="ldur"></span>' +
+        '<button class="lbodyswitch" title="展开 / 收起">▾</button>' +
+      '</div>' +
+      '<div class="lbody closed">' +
+        '<div class="lthink hide"><span class="lbl">思考</span><div class="txt"></div></div>' +
+        '<div class="lsay"></div>' +
+        '<details class="largs hide"><summary>调用参数</summary><pre></pre></details>' +
+        '<details class="lresult hide"><summary>结果</summary><pre></pre></details>' +
+        '<div class="lmeta"></div>' +
+        '<details class="lraw hide"><summary>原始事件（调试）</summary><pre></pre></details>' +
+      '</div>';
+    el._refs = {
+      status: el.querySelector('.lstatus'),
+      dur: el.querySelector('.ldur'),
+      body: el.querySelector('.lbody'),
+      think: el.querySelector('.lthink'),
+      thinkTxt: el.querySelector('.lthink .txt'),
+      say: el.querySelector('.lsay'),
+      args: el.querySelector('.largs'),
+      argsPre: el.querySelector('.largs pre'),
+      result: el.querySelector('.lresult'),
+      resultPre: el.querySelector('.lresult pre'),
+      meta: el.querySelector('.lmeta'),
+      raw: el.querySelector('.lraw'),
+      rawPre: el.querySelector('.lraw pre'),
+    };
+    el._buf = { reasoning: '', content: '' };
+    el._timers = { startedAt: null, frozenMs: null };
+    el.querySelector('.lbodyswitch').onclick = () => el._refs.body.classList.toggle('closed');
+    liveRoot().appendChild(el);
+    LIVE.cards.set(key, el);
+    return el;
+  }
+
+  function setStatus(card, text, cls) {
+    card._refs.status.textContent = text;
+    card._refs.status.className = 'lstatus ' + cls;
+  }
+
+  /** 文本增量 → 缓冲 → requestAnimationFrame 合并渲染（高频增量不会打爆 DOM） */
+  function pushText(card, channel, text) {
+    card._buf[channel] += text;
+    card._dirty = true;
+    if (!LIVE.raf) LIVE.raf = requestAnimationFrame(flushCards);
+  }
+  function clipText(s) {
+    return s.length > 30000 ? '…[仅显示最近 30000 字符]\n' + s.slice(-30000) : s;
+  }
+  function flushCards() {
+    LIVE.raf = 0;
+    for (const card of LIVE.cards.values()) {
+      if (!card._dirty) continue;
+      card._dirty = false;
+      const r = card._refs;
+      if (card._buf.reasoning) {
+        r.think.classList.remove('hide');
+        r.thinkTxt.textContent = clipText(card._buf.reasoning);
+      }
+      r.say.textContent = clipText(card._buf.content);
+    }
+    scrollBottom(false);
+  }
+
+  /** 运行中耗时：本地 tick（不产生网络请求）；已结束的卡片使用服务端 durationMs */
+  function startTick() {
+    if (LIVE.tick) return;
+    LIVE.tick = setInterval(() => {
+      const now = performance.now();
+      for (const card of LIVE.cards.values()) {
+        if (card._timers.frozenMs != null) continue;
+        if (card._timers.startedAt == null) continue;
+        card._refs.dur.textContent = fmtMs(now - card._timers.startedAt) + '…';
+      }
+      if (LIVE.runStartedAt) {
+        const el = $('liveMetrics');
+        if (el) el.textContent = liveMetricsText(now - LIVE.runStartedAt);
+      }
+    }, 200);
+  }
+  function stopTick() {
+    if (LIVE.tick) { clearInterval(LIVE.tick); LIVE.tick = null; }
+  }
+  function liveMetricsText(elapsedMs) {
+    const c = LIVE.counts;
+    const sub = c.subtasks ? ` · 子任务 ${c.subtasks}` : '';
+    return `用时 ${fmtMs(elapsedMs)} · 推理 ${c.llm} 次 · 工具 ${c.tools} 次（失败 ${c.toolsFailed}）${sub} · 帧 ${c.frames}`;
+  }
+
+  function raw(card, e) {
+    if (!card || !LIVE.debug) return;   // 懒序列化：debug 关闭时不 stringify（大事件如 read_file 结果会阻塞主线程导致卡死）
+    card._refs.raw.classList.remove('hide');
+    const s = JSON.stringify(e, null, 2);
+    card._refs.rawPre.textContent = s.length > 8000 ? s.slice(0, 8000) + '\n…[已截断，完整见 /api/runs/:id/events]' : s;
+  }
+
+  function liveReset(goal) {
+    liveRoot().innerHTML = '';
+    LIVE.cards.clear();
+    PENDING_APPROVALS.clear();   // 新任务：清空待审批计数（上一 run 的挂起审批不再计入）
+    updatePendingBadge();
+    LIVE.lastSeq = 0;
+    LIVE.counts = { frames: 0, ephemeral: 0, replay: 0, live: 0, tools: 0, toolsFailed: 0, llm: 0 };
+    LIVE.frames = [];
+    LIVE.meta = null;
+    LIVE.runStartedAt = performance.now();
+    LIVE.stick = true;
+    setPhase('运行中', 'thinking');
+    $('liveDiag').classList.toggle('hide', !LIVE.debug);
+    $('toBottom').classList.add('hide');
+    if (goal) {
+      const c = mkCard('goal', 'user', '用户目标', 'user');
+      c._refs.body.classList.remove('closed');
+      c._refs.say.textContent = goal;
+      setStatus(c, '已提交', 'ok');
+      c._refs.dur.textContent = '';
+    }
+    startTick();
+  }
+
+  // =========================================================================
+  // 人工审批卡（M1 写能力门禁）：三级决定 + diff 按需拉取 + 刷新重建
+  // 事件流（approval_requested）故意只带摘要——diff 全文落盘，走 HTTP 拉，避免被截断/脱敏误伤
+  // =========================================================================
+  const PENDING_APPROVALS = new Set();   // 挂起中的 approvalId：实时事件与刷新重建共用同一来源
+
+  /** 顶部状态区「⏳ 待审批 N」徽标：N=0 时隐藏（renderStatus 重写 innerHTML 后会再挂回来） */
+  function updatePendingBadge() {
+    const line = $('statusLine');
+    if (!line) return;
+    let el = document.getElementById('pendingApprovalBadge');
+    if (!el) {
+      el = document.createElement('span');
+      el.id = 'pendingApprovalBadge';
+      el.className = 'pill';
+      el.style.cssText = 'background:#fff7ed;color:var(--amber);border:1px solid #fed7aa;margin-left:6px';
+      line.appendChild(el);
+    }
+    const n = PENDING_APPROVALS.size;
+    el.textContent = `⏳ 待审批 ${n}`;
+    el.classList.toggle('hide', n === 0);
+  }
+
+  /**
+   * .patch 文本 → 逐行着色 HTML（+ 绿底 / - 红底 / @@ 灰字；每行都过 escapeHtml，不做未转义拼接）。
+   * 注意：文件头与 git 元信息（diff --git / index / --- a/xxx / +++ b/xxx）是元信息，一律灰字——
+   * 只有进入 hunk 区（见到 @@）之后的 +/- 才算真正的增删行。
+   */
+  function approvalDiffHtml(patch) {
+    const lines = String(patch ?? '').split(/\r?\n/);
+    const MAX = 400;   // 超大 diff 只渲染前 400 行，避免主线程卡顿
+    let inHunk = false;   // 是否已进入 hunk 区（遇到 @@ 置 true）
+    const html = lines.slice(0, MAX).map((ln) => {
+      const safe = escapeHtml(ln);
+      if (ln.startsWith('@@')) {
+        inHunk = true;
+        return `<span class="hunk">${safe || ' '}</span>`;
+      }
+      // git 元信息行：不可能是 hunk 体内的行（体内行必以 ' ' / '+' / '-' / '\' 开头），并视为下一个文件段的开始
+      if (ln.startsWith('diff ') || ln.startsWith('index ')) {
+        inHunk = false;
+        return `<span class="hunk">${safe || ' '}</span>`;
+      }
+      // 文件头 --- a/xxx、+++ b/xxx：仅 hunk 之外才是元信息（hunk 内以 ---/+++ 开头的是真删/真增内容行）
+      if (!inHunk && (ln.startsWith('---') || ln.startsWith('+++'))) return `<span class="hunk">${safe || ' '}</span>`;
+      if (!inHunk) return safe;   // 尚未进入 hunk 区：一律不染色（如 new file mode / 二进制提示等）
+      const cls = ln.startsWith('+') ? 'add' : ln.startsWith('-') ? 'del' : '';
+      return cls ? `<span class="${cls}">${safe || ' '}</span>` : safe;
+    }).join('\n');
+    return html + (lines.length > MAX ? `\n<span class="hunk">…[已截断：仅显示前 ${MAX} 行，共 ${lines.length} 行]</span>` : '');
+  }
+
+  /** approval_decided 事件 → 卡片状态文案（超时 / 取消 / 粘性放行如实区分） */
+  function approvalDecidedText(d) {
+    let text = '已决定';
+    if (d.autoByPolicy) text = '粘性策略自动放行';
+    else if (d.value === 'allow_file') text = '已批准 · 完全同意此文件（后续该文件自动放行）';
+    else if (d.value === 'allow_once') text = '已批准 · 仅本次';
+    else if (d.value === 'deny') {
+      if (d.actor === 'timeout') text = '已超时按拒绝';
+      else if (d.actor === 'cancel') text = '已取消';
+      else text = '已拒绝';
+    }
+    return text + (d.highRiskConfirmed ? ' · 已完成高危二次确认' : '');
+  }
+
+  /**
+   * 建 / 复用审批卡（key = approval:approvalId）。
+   * 同一个 approvalId 的重复事件（SSE 重放、刷新后重建）复用同一张卡，不重复建。
+   * @param req { approvalId, toolName, files:[{relPath,op,addedLines,removedLines}], checks:[{level,source,ok,summary}], riskNote?, timeoutMs?, requestedAt? }
+   */
+  function renderApprovalCard(req) {
+    const aid = String((req && req.approvalId) || '');
+    if (!aid) return null;
+    const key = 'approval:' + aid;
+    const existing = LIVE.cards.get(key);
+    if (existing) return existing;   // 幂等：重复事件 / 重建只认已存在的卡
+    const files = Array.isArray(req.files) ? req.files : [];
+    const checks = Array.isArray(req.checks) ? req.checks : [];
+    const warnings = Array.isArray(req.warnings) ? req.warnings : [];
+    const riskReasons = Array.isArray(req.riskReasons) ? req.riskReasons.map(String) : [];
+    const highRisk = req.highRisk === true || req.requiresExplicitConfirmation === true || riskReasons.length > 0;
+
+    const card = mkCard(key, 'approval', `审批 · ${req.toolName || '?'}`, `${files.length} 个文件待落盘`);
+    card._refs.body.classList.remove('closed');
+    setStatus(card, '待审批', 'wait');
+    const metaBits = [];
+    if (req.requestedAt) metaBits.push(`发起于 ${String(req.requestedAt).replace('T', ' ').slice(0, 19)}`);
+    if (req.timeoutMs) metaBits.push(`超时 ${Math.round(req.timeoutMs / 1000)}s 未决定将按拒绝处理`);
+    if (metaBits.length) card._refs.meta.textContent = metaBits.join(' · ');
+
+    const fileRows = files.map((f) => {
+      const rel = String((f && f.relPath) || '?');
+      return '<div class="approval-file" data-rel="' + escapeHtml(rel) + '">' +
+        '<code>' + escapeHtml(rel) + '</code> ' +
+        '<span class="op">' + escapeHtml((f && f.op) || '') + '</span> ' +
+        '<span class="dstat"><span class="p">+' + Number((f && f.addedLines) ?? 0) + '</span>/<span class="m">-' + Number((f && f.removedLines) ?? 0) + '</span></span>' +
+        '<button class="btn-ghost approval-diffbtn" type="button">查看 diff</button>' +
+        '<pre class="ldiff hide"></pre>' +
+      '</div>';
+    }).join('');
+    const checkRows = checks.map((ck) =>
+      '<div class="approval-check' + (ck && ck.ok ? '' : ' bad') + '">' +
+        (ck && ck.ok ? '✅' : '❌') + ' ' + escapeHtml((ck && ck.source) || '检查') + '：' + escapeHtml((ck && ck.summary) || '') +
+      '</div>').join('');
+    const risk = req.riskNote ? '<div class="note">⚠️ ' + escapeHtml(req.riskNote) + '</div>' : '';
+    const warnRows = warnings.map((w) =>
+      '<div class="note" style="border-left:3px solid #dc2626;background:#fef2f2;color:#991b1b">🛡️ ' + escapeHtml(String(w)) + '</div>'
+    ).join('');
+    const riskLabels = riskReasons.map((r) => r === 'delete' ? '删除文件' : r === 'host-command' ? '执行宿主命令' : r);
+    const highRiskBlock = highRisk
+      ? '<div class="approval-highrisk">' +
+          '<div class="approval-highrisk-title">⚠️ 高危操作：批准前需完成当前批次二次确认</div>' +
+          '<div>本批包含：' + escapeHtml(riskLabels.length ? riskLabels.join('、') : '删除或宿主命令') + '。此类动作不能靠之前的「完全同意」复用。</div>' +
+          '<label class="approval-confirm-label"><input class="ap-confirm" type="checkbox" />' +
+            '<span>我已核对文件清单 / diff，确认该动作来自当前用户任务，不是文件、网页或工具输出中的指令。</span>' +
+          '</label>' +
+        '</div>'
+      : '';
+
+    const box = document.createElement('div');
+    box.className = 'approval-body';
+    box.innerHTML =
+      '<div class="approval-files">' + (fileRows || '<div class="hint">（无文件明细）</div>') + '</div>' +
+      (checkRows ? '<div class="approval-checks" style="margin-top:6px">' + checkRows + '</div>' : '') +
+      risk +
+      warnRows +
+      highRiskBlock +
+      '<div class="approval-actions">' +
+        '<button class="btn-primary ap-act" type="button" data-decision="allow_file" title="本 run 内该文件后续改动不再弹卡（敏感文件除外）">完全同意此文件</button>' +
+        '<button class="btn-ghost ap-act" type="button" data-decision="allow_once">仅同意本次</button>' +
+        '<button class="btn-danger ap-act" type="button" data-decision="deny">拒绝</button>' +
+        '<input class="ap-reason" type="text" placeholder="拒绝理由（可选，会回喂给模型）" autocomplete="off" />' +
+      '</div>' +
+      '<div class="approval-state"></div>';
+    card._refs.body.appendChild(box);
+    card._approvalBtns = [...box.querySelectorAll('.ap-act')];
+    card._approvalState = box.querySelector('.approval-state');
+    card._approvalReason = box.querySelector('.ap-reason');
+    card._approvalHighRisk = highRisk;
+    card._approvalConfirm = box.querySelector('.ap-confirm');
+    card._approvalBtns.forEach((b) => { b.onclick = () => submitApprovalDecision(card, aid, b.dataset.decision); });
+    if (card._approvalConfirm) {
+      card._approvalConfirm.onchange = () => {
+        if (card._approvalDecided) return;
+        syncApprovalButtons(card, true);
+        if (card._approvalState) {
+          card._approvalState.textContent = card._approvalConfirm.checked
+            ? '已勾选当前批次二次确认，可以批准。'
+            : '批准按钮已锁定：请先勾选二次确认（拒绝始终可用）。';
+        }
+      };
+    }
+    syncApprovalButtons(card, true);
+    // 每个文件的「查看 diff」：点击时才拉（事件流不带 diff 全文）
+    box.querySelectorAll('.approval-file').forEach((row) => {
+      const btn = row.querySelector('.approval-diffbtn');
+      const pre = row.querySelector('.ldiff');
+      btn.onclick = () => toggleApprovalDiff(aid, row.dataset.rel, btn, pre);
+    });
+    // 可见性（M1'）：待审批卡出现时滚入视野 + 短暂高亮——修改操作的确认交互不能被"藏在下面"
+    try { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch { /* 环境差异：忽略 */ }
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 2600);
+    return card;
+  }
+
+  /** 高危批次：未勾选确认时只锁批准；拒绝永远可用。 */
+  function syncApprovalButtons(card, enabled) {
+    (card._approvalBtns || []).forEach((b) => {
+      if (!enabled) { b.disabled = true; return; }
+      const needsConfirm = card._approvalHighRisk && b.dataset.decision !== 'deny';
+      b.disabled = !!needsConfirm && !(card._approvalConfirm && card._approvalConfirm.checked);
+    });
+  }
+
+  /** 「查看 diff」：拉 GET /api/runs/:id/approvals 找到该 approvalId 的 files[].diff；已拉过则折叠/展开切换 */
+  async function toggleApprovalDiff(approvalId, relPath, btn, pre) {
+    if (pre.dataset.loaded === '1') { pre.classList.toggle('hide'); return; }
+    btn.disabled = true;
+    pre.classList.remove('hide');
+    pre.textContent = '加载 diff…';
+    try {
+      const data = await (await fetch('/api/runs/' + currentId + '/approvals')).json();
+      const p = (data.pending || []).find((x) => String(x.approvalId) === String(approvalId));
+      const f = p && (p.files || []).find((x) => String(x.relPath) === String(relPath));
+      if (!f || typeof f.diff !== 'string') {
+        pre.innerHTML = '<span class="hunk">（diff 不可用：审批可能已被决定 / 文件已清理）</span>';
+        return;
+      }
+      pre.innerHTML = approvalDiffHtml(f.diff);
+      pre.dataset.loaded = '1';
+    } catch (e) {
+      pre.innerHTML = '<span class="hunk">（diff 拉取失败：' + escapeHtml(String((e && e.message) || e)) + '）</span>';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  /** 三级决定：立刻禁用按钮 + 「已提交…」→ POST；404 = 已超时/已决定 */
+  async function submitApprovalDecision(card, approvalId, decision) {
+    if (card._approvalHighRisk && decision !== 'deny' && !(card._approvalConfirm && card._approvalConfirm.checked)) {
+      if (card._approvalState) card._approvalState.textContent = '请先勾选当前批次高危二次确认；拒绝不需要确认。';
+      syncApprovalButtons(card, true);
+      return;
+    }
+    const btns = card._approvalBtns || [];
+    btns.forEach((b) => { b.disabled = true; });
+    if (card._approvalConfirm) card._approvalConfirm.disabled = true;
+    const state = card._approvalState;
+    if (state) state.textContent = '已提交…';
+    setStatus(card, '已提交…', 'run');
+    const reason = (card._approvalReason && card._approvalReason.value.trim()) || '';
+    const body = { decision };
+    if (reason) body.reason = reason;   // 没输入就不带（服务端按 undefined 处理）
+    if (card._approvalHighRisk && decision !== 'deny') body.confirmHighRisk = true;
+    let res;
+    try {
+      res = await fetch('/api/runs/' + currentId + '/approvals/' + encodeURIComponent(approvalId), {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch (e) {
+      if (state) state.textContent = '提交失败（网络错误）：' + ((e && e.message) || e);
+      setStatus(card, '提交失败', 'err');
+      if (card._approvalConfirm) card._approvalConfirm.disabled = false;
+      syncApprovalButtons(card, true);   // 网络失败可重试；高危仍需保持勾选
+      return;
+    }
+    if (res.status === 404) {
+      if (state) state.textContent = '已超时或已决定';
+      setStatus(card, '已失效', 'err');
+      card._approvalDecided = true;   // 终态：重连重放的 approval_requested 不再点亮徽标
+      PENDING_APPROVALS.delete(approvalId); updatePendingBadge();
+      return;
+    }
+    if (!res.ok) {
+      let payload = null;
+      try { payload = await res.json(); } catch { /* 非 JSON 错误体 */ }
+      if (state) state.textContent = payload && payload.code === 'HIGH_RISK_CONFIRMATION_REQUIRED'
+        ? '服务端要求二次确认：请勾选后重试'
+        : '提交失败（HTTP ' + res.status + '）' + (payload && payload.error ? '：' + payload.error : '');
+      setStatus(card, '提交失败', 'err');
+      if (card._approvalConfirm) card._approvalConfirm.disabled = false;
+      syncApprovalButtons(card, true);
+      return;
+    }
+    if (card._approvalConfirm) card._approvalConfirm.disabled = true;
+    if (state) state.textContent = { allow_file: '已批准（完全同意）', allow_once: '已批准（本次）', deny: '已拒绝' }[decision] || '已决定';
+    setStatus(card, decision === 'deny' ? '已拒绝' : '已批准', decision === 'deny' ? 'err' : 'ok');
+    card._approvalDecided = true;
+    PENDING_APPROVALS.delete(approvalId); updatePendingBadge();
+  }
+
+  /** approval_decided 事件 → 回写卡片（按钮定格；autoByPolicy 粘性放行不会先弹卡） */
+  function applyApprovalDecision(card, d) {
+    const state = card._approvalState;
+    if (state) state.textContent = approvalDecidedText(d);
+    (card._approvalBtns || []).forEach((b) => { b.disabled = true; });
+    if (card._approvalReason) card._approvalReason.disabled = true;
+    if (card._approvalConfirm) card._approvalConfirm.disabled = true;
+    card._approvalDecided = true;
+    if (d.autoByPolicy) setStatus(card, '自动放行', 'ok');
+    else if (d.value === 'deny') setStatus(card, d.actor === 'timeout' ? '已超时' : d.actor === 'cancel' ? '已取消' : '已拒绝', 'err');
+    else setStatus(card, '已批准', 'ok');
+    const bits = [];
+    if (d.reason) bits.push(`理由：${String(d.reason).slice(0, 160)}`);
+    if (d.actor) bits.push(`决定方：${d.actor}`);
+    if (d.highRiskConfirmed) bits.push('高危二次确认：已完成');
+    if (d.denyLimitReached) bits.push('⚠️ 连续拒绝已达上限');
+    if (bits.length) card._refs.meta.textContent = bits.join(' · ');
+  }
+
+  /** 刷新 / SSE 建连（含重连回放）后重建待批卡：拉一次挂起审批，逐个走与 approval_requested 相同的建卡逻辑 */
+  async function refreshPendingApprovals(id) {
+    if (!id) return;
+    try {
+      const data = await (await fetch('/api/runs/' + id + '/approvals')).json();
+      for (const p of (data.pending || [])) {
+        if (!p || !p.approvalId) continue;
+        const c = renderApprovalCard(p);
+        if (!c || !c._approvalDecided) PENDING_APPROVALS.add(String(p.approvalId));
+      }
+      updatePendingBadge();
+    } catch { /* 重建失败不影响任务流（后续事件 / 轮询会再试） */ }
+  }
+
+  /** 事件 → 实时视图（核心分发） */
+  function applyLiveEvent(e) {
+    if (!e || typeof e.type !== 'string' || e.type.startsWith('_')) return;
+    LIVE.counts.frames += 1;
+    if (e.ephemeral) LIVE.counts.ephemeral += 1;
+    if (!e.ephemeral && e.seq > 0) {
+      if (e.seq <= LIVE.lastSeq) return;   // 断线重连回放去重
+      LIVE.lastSeq = e.seq;
+    }
+    const d = e.data || {};
+    switch (e.type) {
+      case 'run_started': {
+        if (d.inputs && d.inputs.goal && !LIVE.cards.has('goal')) {
+          const c = mkCard('goal', 'user', '用户目标', 'user');
+          c._refs.body.classList.remove('closed');
+          c._refs.say.textContent = String(d.inputs.goal);
+          setStatus(c, '已提交', 'ok');
+        }
+        if (d.resumed) {
+          const c = mkCard('resume', 'user', '任务恢复', `从步骤 ${d.checkpointStep ?? '?'} 继续`);
+          setStatus(c, '已恢复', 'ok');
+        }
+        setPhase('运行中', 'thinking');
+        break;
+      }
+      case 'model_request': {
+        LIVE.counts.llm += 1;
+        const key = 'llm:' + (d.spanId || Math.random());
+        const c = mkCard(key, 'llm', `推理 #${LIVE.counts.llm}`, `step ${d.step ?? '?'} · ${d.name || ''}`);
+        c.classList.add('streaming');
+        c._refs.body.classList.remove('closed');
+        c._timers.startedAt = performance.now();
+        setStatus(c, '推理中', 'run');
+        raw(c, e);
+        setPhase('推理中', 'thinking');
+        break;
+      }
+      case 'llm_delta': {
+        const c = LIVE.cards.get('llm:' + d.spanId);
+        if (c) pushText(c, d.channel === 'reasoning' ? 'reasoning' : 'content', String(d.text ?? ''));
+        break;
+      }
+      case 'model_completed': {
+        const c = LIVE.cards.get('llm:' + d.spanId);
+        if (c) {
+          c.classList.remove('streaming');
+          c._timers.frozenMs = d.durationMs ?? 0;
+          c._refs.dur.textContent = fmtMs(d.durationMs);
+          const names = d.outputs && Array.isArray(d.outputs.toolNames) ? d.outputs.toolNames : [];
+          const decision = names.length ? `决策 → 调用工具：${names.join('、')}` : `决策 → ${(d.outputs && d.outputs.stopReason) || '结束'}`;
+          c._refs.meta.textContent = decision + (d.model ? ` · ${d.model}` : '') + (d.providerLatencyMs != null ? ` · provider ${d.providerLatencyMs}ms` : '');
+          // 无增量（如刷新后回放）时用服务端聚合预览兜底展示
+          if (!c._buf.content && d.outputs && d.outputs.contentPreview) c._refs.say.textContent = String(d.outputs.contentPreview);
+          if (!c._buf.reasoning && d.outputs && d.outputs.reasoningPreview) {
+            c._refs.think.classList.remove('hide');
+            c._refs.thinkTxt.textContent = String(d.outputs.reasoningPreview);
+          }
+          setStatus(c, '完成', 'ok');
+          raw(c, e);
+        }
+        break;
+      }
+      case 'tool_call_requested': {
+        const key = 'tool:' + (d.toolCallId || Math.random());
+        const c = mkCard(key, 'tool', `工具 · ${d.name || '?'}`, `已发起 · id ${d.toolCallId || ''}`);
+        c._refs.body.classList.remove('closed');
+        c._refs.args.classList.remove('hide');
+        c._refs.args.open = true;
+        c._refs.argsPre.textContent = JSON.stringify(d.arguments ?? {}, null, 2);
+        setStatus(c, '已发起', 'wait');
+        raw(c, e);
+        c._tcId = d.toolCallId;
+        if (d.parentId) c.dataset.llmSpan = String(d.parentId);
+        setPhase('调用工具', 'tool');
+        break;
+      }
+      case 'tool_started': {
+        const c = LIVE.cards.get('tool:' + (d.toolCallId || '')) || mkCard('tool:' + (d.toolCallId || Math.random()), 'tool', `工具 · ${d.name || '?'}`, '');
+        if (d.toolCallId) LIVE.cards.set('tool:' + d.toolCallId, c);
+        if (d.name) c.querySelector('.ltitle').textContent = '工具 · ' + d.name;
+        c.classList.add('streaming');
+        c._timers.startedAt = performance.now();
+        c._counted = c._counted || (LIVE.counts.tools += 1, true);
+        setStatus(c, d.retry ? `重试 ${d.retry}` : '执行中', 'run');
+        raw(c, e);
+        setPhase('执行工具', 'tool');
+        break;
+      }
+      case 'tool_completed':
+      case 'tool_failed': {
+        const id = d.toolCallId || (d.outputs && d.outputs.toolCallId);
+        const c = LIVE.cards.get('tool:' + id);
+        if (!c) break;
+        c.classList.remove('streaming');
+        c._timers.frozenMs = d.durationMs ?? 0;
+        c._refs.dur.textContent = fmtMs(d.durationMs);
+        const ok = e.type === 'tool_completed';
+        if (!ok) LIVE.counts.toolsFailed += 1;
+        setStatus(c, ok ? '完成' : '失败', ok ? 'ok' : 'err');
+        const snippet = (d.outputs && d.outputs.resultSnippet) || '';
+        c._refs.result.classList.remove('hide');
+        c._refs.result.classList.toggle('err', !ok);
+        c._refs.result.open = true;
+        c._refs.resultPre.textContent = ok
+          ? (snippet ? snippet + '\n…（摘要，最多 500 字符；完整结果仅进入模型上下文）' : '（无结果摘要）')
+          : `[${d.code || 'ERROR'}] ${d.message || ''}`;
+        const bits = [];
+        if (d.toolDurationMs != null) bits.push(`工具内部耗时 ${d.toolDurationMs}ms`);
+        if (d.truncated) bits.push('结果被截断');
+        if (bits.length) c._refs.meta.textContent = bits.join(' · ');
+        raw(c, e);
+        setPhase('处理结果', 'thinking');
+        break;
+      }
+      case 'subtask_started': {
+        const key = 'st:' + (d.subtaskId || Math.random());
+        const c = mkCard(key, 'subtask', `子 Agent · ${d.specId || '?'}`, `并行执行中 · ${String(d.objective || '').slice(0, 40)}`);
+        c._refs.body.classList.remove('closed');
+        c._timers.startedAt = performance.now();
+        setStatus(c, '运行中', 'run');
+        c._refs.meta.textContent = String(d.objective || '');
+        raw(c, e);
+        LIVE.counts.subtasks = (LIVE.counts.subtasks || 0) + 1;
+        setPhase(`并行执行 ${LIVE.counts.subtasks} 个子任务`, 'tool');
+        break;
+      }
+      case 'subtask_completed':
+      case 'subtask_failed': {
+        const key = 'st:' + (d.subtaskId || '');
+        const c = LIVE.cards.get(key);
+        if (!c) break;
+        const ok = e.type === 'subtask_completed';
+        c.classList.remove('streaming');
+        c._timers.frozenMs = d.durationMs ?? 0;
+        c._refs.dur.textContent = fmtMs(d.durationMs);
+        setStatus(c, ok ? '完成' : '失败', ok ? 'ok' : 'err');
+        const bits = [];
+        if (d.summary) bits.push(`结论：${String(d.summary).slice(0, 120)}`);
+        if (d.errorCode) bits.push(`错误码：${d.errorCode}`);
+        if (d.failureReason) bits.push(String(d.failureReason).slice(0, 160));
+        if (d.contractViolation) bits.push(`⚠️ ${d.contractViolation}`);
+        if (bits.length) c._refs.meta.textContent = bits.join(' · ');
+        raw(c, e);
+        break;
+      }
+      case 'subtask_report_submitted': {
+        const c = LIVE.cards.get('st:' + (d.subtaskId || ''));
+        if (c) {
+          c._refs.meta.textContent += ` · 置信度 ${d.confidence ?? '-'} · 证据 ${d.evidenceCount ?? 0} 条${d.escalateTo ? ` · 建议改派 ${d.escalateTo}` : ''}`;
+        }
+        break;
+      }
+      case 'orchestration_submitted': {
+        const c = mkCard('orch-submitted', 'subtask', '汇总提交', '主 Agent 已提交编排汇总');
+        c._refs.body.classList.remove('closed');
+        setStatus(c, '已提交', 'ok');
+        const st = d.subtaskStats || {};
+        c._refs.meta.textContent = `子任务 ${st.total ?? 0} 个（成功 ${st.ok ?? 0} / 失败 ${st.failed ?? 0} / 取消 ${st.cancelled ?? 0} / 限流截断 ${st.limited ?? 0}）· findings ${d.findingCount ?? 0} · 冲突 ${d.conflictCount ?? 0} · 未解决 ${d.unresolvedCount ?? 0}`;
+        raw(c, e);
+        setPhase('汇总中', 'thinking');
+        break;
+      }
+      case 'approval_requested': {
+        // 人工审批请求（M1）：建审批卡 + 更新「待审批 N」徽标
+        // 已决定的卡不再计入徽标（重连重放旧 approval_requested 时不会被重新点亮）
+        const c = renderApprovalCard(d);
+        if (c) raw(c, e);
+        if (!c || !c._approvalDecided) {
+          PENDING_APPROVALS.add(String(d.approvalId || ''));
+          setPhase('等待人工审批', 'approval');
+        }
+        updatePendingBadge();
+        break;
+      }
+      case 'approval_decided': {
+        // 决定回写：卡片状态定格 + 按钮禁用（粘性自动放行 autoByPolicy 未弹过卡时只更新徽标）
+        const aid = String(d.approvalId || '');
+        const c = LIVE.cards.get('approval:' + aid);
+        if (c) applyApprovalDecision(c, d);
+        PENDING_APPROVALS.delete(aid);
+        updatePendingBadge();
+        break;
+      }
+      case 'verification_started': {
+        const c = mkCard('verify:' + (d.jobId || e.seq), 'tool', `验证 · ${d.level || 'L2'}`, String(d.phase || ''));
+        c._refs.body.classList.remove('closed');
+        const files = Array.isArray(d.files) ? d.files : [];
+        c._refs.say.textContent = (files.length ? `检查文件：${files.join('、')}\n` : '') + '正在执行检查…';
+        setStatus(c, '验证中', 'run');
+        raw(c, e);
+        setPhase('验证中', 'thinking');
+        break;
+      }
+      case 'verification_completed': {
+        const c = mkCard('verify-end:' + e.seq, 'tool', `验证结果 · ${d.level || 'L2'}`, String(d.phase || ''));
+        c._refs.body.classList.remove('closed');
+        const steps = Array.isArray(d.steps) ? d.steps : [];
+        const lines = steps.map((s) => `${s.ok ? '✅' : '❌'} ${s.source}: ${s.summary}`).join('\n');
+        c._refs.say.textContent = [d.summary, lines, d.note].filter(Boolean).join('\n') || (d.ok ? '通过' : '未通过');
+        if (d.excerpt) {
+          c._refs.args.classList.remove('hide');
+          c._refs.args.open = true;
+          c._refs.argsPre.textContent = String(d.excerpt);
+        }
+        setStatus(c, d.cancelled ? '已取消' : d.ok ? '通过' : '失败', d.cancelled ? 'wait' : d.ok ? 'ok' : 'err');
+        c._refs.meta.textContent = d.durationMs != null ? fmtMs(d.durationMs) : '';
+        raw(c, e);
+        break;
+      }
+      case 'change_applied': {
+        const applied = Array.isArray(d.applied) ? d.applied : [];
+        const refused = Array.isArray(d.refused) ? d.refused : [];
+        const anyApplied = applied.length > 0;
+        const c = mkCard('applied:' + e.seq, 'tool', anyApplied ? '改动已落盘' : '改动未落盘', String(d.approvalId || ''));
+        c._refs.body.classList.remove('closed');
+        c._refs.say.textContent = (applied.length
+          ? `已写入 ${applied.length} 个文件：${applied.join('、')}`
+          : '没有文件写入成功（审批已通过，但落盘被拒或没有可写内容）') +
+          (refused.length ? `\n未写入 ${refused.length} 个：${refused.join('、')}` : '');
+        setStatus(c, anyApplied ? '已落盘' : '未落盘', anyApplied ? 'ok' : 'err');
+        raw(c, e);
+        break;
+      }
+      case 'change_rolled_back': {
+        const c = mkCard('rollback:' + e.seq, 'error', '改动已回滚', String(d.approvalId || ''));
+        c._refs.body.classList.remove('closed');
+        const files = Array.isArray(d.files) ? d.files : [];
+        c._refs.say.textContent = `已恢复 ${files.length} 个文件${files.length ? `：${files.join('、')}` : ''}` +
+          (d.reason ? `\n原因：${String(d.reason).slice(0, 600)}` : '');
+        setStatus(c, '已回滚', 'err');
+        raw(c, e);
+        break;
+      }
+      case 'runtime_error': {
+        const c = mkCard('err:' + (d.errorId || Math.random()), 'error', `错误报告 · ${d.source || '?'}`, String(d.phase || ''));
+        c._refs.body.classList.remove('closed');
+        setStatus(c, '已记录', 'err');
+        const lines = [
+          `id: ${d.errorId || '-'} ｜ 类型: ${d.errorType || '-'} ｜ 码: ${d.code || '-'}`,
+          d.location ? `位置: ${d.location}` : '位置: （栈中未找到项目内帧）',
+          `原因: ${d.message || ''}`,
+          d.hint ? `建议: ${d.hint}` : '',
+          d.context ? `上下文: ${JSON.stringify(d.context).slice(0, 300)}` : '',
+        ].filter(Boolean);
+        c._refs.say.textContent = lines.join('\n');
+        c._refs.args.classList.remove('hide');
+        c._refs.args.open = true;
+        c._refs.argsPre.textContent = JSON.stringify(e.data, null, 2);
+        raw(c, e);
+        break;
+      }
+      case 'checkpoint_saved': {
+        const c = mkCard('cp:' + (e.seq || Math.random()), 'user', '检查点已保存', `step ${d.step ?? '?'}`);
+        setStatus(c, '已保存', 'ok');
+        c._refs.meta.textContent = `模型调用 ${d.modelCalls ?? '?'} 次（断线/失败后可恢复）`;
+        c._refs.body.classList.remove('closed');
+        break;
+      }
+      case 'run_completed': {
+        const ans = (d.outputs && d.outputs.finalAnswer) || d.finalAnswer || '';
+        const c = mkCard('answer', 'answer', '最终答案', '');
+        c._refs.body.classList.remove('closed');
+        c._refs.say.textContent = ans || '（无内容）';
+        setStatus(c, '完成', 'ok');
+        c._refs.dur.textContent = fmtMs(d.durationMs);
+        raw(c, e);
+        setPhase('已完成', 'done');
+        break;
+      }
+      case 'run_awaiting_user': {
+        const au = d.awaitingUser || {};
+        const qs = Array.isArray(au.questions) ? au.questions : [];
+        const c = mkCard('awaiting:' + (e.seq || Math.random()), 'user', '等待你回答', 'ask_user');
+        c._refs.body.classList.remove('closed');
+        const head = au.reason ? `<div class="meta">原因：${escapeHtml(au.reason)}</div>` : '';
+        const ctx = au.context ? `<div class="meta">背景：${escapeHtml(au.context)}</div>` : '';
+        c._refs.say.innerHTML = head + ctx + '<b>请回答：</b><ol>' +
+          qs.map((q) => `<li>${escapeHtml(q)}</li>`).join('') + '</ol>' +
+          '<div class="meta">回答后直接在下方输入框提交新一轮任务即可继续。</div>';
+        setStatus(c, '等待回答', 'wait');
+        raw(c, e);
+        setPhase('等待你回答', 'approval');
+        break;
+      }
+      case 'run_failed':
+      case 'run_cancelled':
+      case 'run_limit_reached': {
+        const c = mkCard('end:' + e.type, 'error', e.type === 'run_failed' ? '任务失败' : e.type === 'run_cancelled' ? '任务已取消' : '触达限制', '');
+        c._refs.body.classList.remove('closed');
+        c._refs.say.innerHTML = '<span class="lfail">' + escapeHtml(d.failureReason || d.errorCode || e.type) + '</span>';
+        c._refs.meta.textContent = d.triggeredLimit ? `触发限制：${d.triggeredLimit}` : '';
+        setStatus(c, '结束', 'err');
+        raw(c, e);
+        setPhase('已结束', 'error');
+        break;
+      }
+    }
+    pushFrame(e);
+    scrollBottom(false);
+  }
+
+  // ---------------- 调试面板 ----------------
+  function pushFrame(e) {
+    const now = performance.now();
+    const prev = LIVE.lastFrameAt;
+    LIVE.lastFrameAt = now;
+    if (!LIVE.debug) return;
+    LIVE.frames.push({
+      type: e.type,
+      seq: e.ephemeral ? '临时' : e.seq,
+      gapMs: prev ? now - prev : null,
+      pushMs: e._pushDelayMs != null ? e._pushDelayMs : null,
+      chars: e.data && e.data.text ? String(e.data.text).length : null,
+    });
+    if (LIVE.frames.length > 60) LIVE.frames.shift();
+    renderDiag();
+  }
+  function renderDiag() {
+    if (!LIVE.debug) return;
+    const rows = LIVE.frames.slice().reverse().map((f) =>
+      `<tr><td>${escapeHtml(f.type)}</td><td>${f.seq}</td>` +
+      `<td>${f.gapMs == null ? '-' : Math.round(f.gapMs)}</td>` +
+      `<td>${f.pushMs == null ? '-' : Math.round(f.pushMs)}</td>` +
+      `<td>${f.chars == null ? '' : f.chars}</td></tr>`).join('');
+    $('liveDiag').innerHTML =
+      '<div class="diag-conn">' +
+        `<span>连接 <b>${LIVE.conn}</b></span>` +
+        `<span>已收帧 <b>${LIVE.counts.frames}</b></span>` +
+        `<span>临时帧 <b>${LIVE.counts.ephemeral}</b></span>` +
+        `<span>回放 <b>${LIVE.counts.replay}</b></span>` +
+        `<span>lastSeq <b>${LIVE.lastSeq}</b></span>` +
+        `<span>心跳 <b>${LIVE.meta ? LIVE.meta.heartbeatMs + 'ms' : '-'}</b></span>` +
+        `<span>看门狗 <b>${LIVE.meta ? LIVE.meta.watchdogMs + 'ms' : '-'}</b></span>` +
+      '</div>' +
+      '<table><thead><tr><th>type</th><th>seq</th><th>帧间隔ms</th><th>产生→推送ms</th><th>字符</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>' +
+      '<p class="hint">帧间隔=客户端相邻两帧到达间隔；产生→推送由服务端在实时帧上打的时间戳算出（本机时钟一致，可用于排查推送延迟）。</p>';
+  }
+
+  // ---------------- SSE 兜底轮询（SSE 不可用时） ----------------
+  function stopPolling() {
+    if (LIVE.polling) { clearInterval(LIVE.polling); LIVE.polling = null; }
+  }
+  function startPolling(id) {
+    if (LIVE.polling) return;
+    refreshPendingApprovals(id);   // 兜底路径（SSE 不可用）同样重建待批卡
+    LIVE.polling = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/runs/${id}/events?fromSeq=${LIVE.lastSeq}&limit=500`);
+        const evs = await res.json();
+        for (const e of evs) applyLiveEvent(e);
+        const r = await (await fetch('/api/runs/' + id)).json();
+        if (['completed','failed','cancelled','limit_reached','awaiting_user'].includes(r.status)) {
+          stopPolling();
+          renderStatus(r.status); renderStats(r);
+          if (r.finalAnswer) showAnswer(r.finalAnswer, false);
+          if (r.failureReason) showAnswer('失败原因: ' + r.failureReason, true);
+          loadSources(id); fetchTrace(id);
+          finalizeConversation(id, r);
+          stopTick();
+        }
+      } catch { /* 忽略瞬时错误 */ }
+    }, 1000);
+  }
+
+  // =========================================================================
+  // 事件流视图（原始事件）
+  // =========================================================================
+  function evClass(type) {
+    if (type.startsWith('tool_completed')) return 'ev ok';
+    if (type.startsWith('tool_failed')) return 'ev err';
+    if (type.startsWith('tool_')) return 'ev tool';
+    return 'ev';
+  }
+  function addEvent(e) {
+    if (!e || typeof e.type !== 'string' || e.type.startsWith('_')) return;
+    const div = document.createElement('div');
+    div.className = evClass(e.type);
+    const d = e.data || {};
+    let meta = '';
+    if (d.name) meta += ` · ${d.name}`;
+    if (d.durationMs != null) meta += ` · ${+d.durationMs.toFixed(1)}ms`;
+    if (d.code) meta += ` · [${d.code}]`;
+    if (e._pushDelayMs != null) meta += ` · +${Math.round(e._pushDelayMs)}ms`;
+    div.innerHTML = `<div class="t">${e.type} #${e.seq}</div><div class="meta">${new Date(e.timestamp).toLocaleTimeString()}${meta}</div>`;
+    const holder = $('events');
+    if (holder.dataset.placeholder) { holder.innerHTML = ''; delete holder.dataset.placeholder; }
+    holder.appendChild(div);
+    holder.scrollTop = holder.scrollHeight;
+  }
+  function showAnswer(text, isError) {
+    const el = $('answer'); el.textContent = text; el.classList.toggle('error', !!isError);
+  }
+
+  // ---------------------------------------------------------------
+  // 深度验证（L2）：终态 run 可随时重跑宿主全量测试（异步任务 + 轮询）
+  // ---------------------------------------------------------------
+  let verifyTimer = null;
+  function setVerifyPanelVisible(on) {
+    $('verifyPanel').style.display = on ? 'flex' : 'none';
+    if (!on && verifyTimer) { clearInterval(verifyTimer); verifyTimer = null; }
+  }
+  function renderVerification(job) {
+    const st = $('verifyStatus');
+    const btn = $('verifyBtn');
+    const cancel = $('verifyCancelBtn');
+    const detail = $('verifyDetail');
+    if (!job) {
+      st.textContent = '尚未运行深度验证';
+      st.style.color = '#1e40af';
+      btn.disabled = false;
+      btn.textContent = '重新验证当前仓库';
+      cancel.style.display = 'none';
+      detail.textContent = '';
+      return;
+    }
+    const running = job.status === 'queued' || job.status === 'running';
+    const label = { queued: '排队中', running: '验证中', passed: '通过', failed: '失败', cancelled: '已取消' }[job.status] || job.status;
+    st.textContent = `${label} · ${job.summary || ''}${job.durationMs != null ? ` · ${fmtMs(job.durationMs)}` : ''}`;
+    st.style.color = job.status === 'passed' ? '#15803d' : job.status === 'failed' ? '#b91c1c' : job.status === 'cancelled' ? '#b45309' : '#1e40af';
+    btn.disabled = running;
+    btn.textContent = running ? '验证中…' : '重新验证当前仓库';
+    cancel.style.display = running ? '' : 'none';
+    detail.textContent = job.excerpt ? String(job.excerpt).slice(0, 1600) : '';
+  }
+  async function pollVerification(id) {
+    try {
+      const b = await (await fetch(`/api/runs/${id}/verification`)).json();
+      renderVerification(b.job);
+      if (!b.job || ['passed', 'failed', 'cancelled'].includes(b.job.status)) {
+        if (verifyTimer) { clearInterval(verifyTimer); verifyTimer = null; }
+      }
+    } catch (e) { reportClientError('pollVerification', e.message, e.stack); }
+  }
+  async function loadVerification(id, showPanel = true) {
+    try {
+      const b = await (await fetch(`/api/runs/${id}/verification`)).json();
+      if (showPanel) setVerifyPanelVisible(true);
+      renderVerification(b.job);
+      if (b.job && (b.job.status === 'queued' || b.job.status === 'running')) {
+        if (verifyTimer) clearInterval(verifyTimer);
+        verifyTimer = setInterval(() => pollVerification(id), 1500);
+      }
+    } catch (e) { reportClientError('loadVerification', e.message, e.stack); }
+  }
+  async function startVerification(id) {
+    let res;
+    try { res = await fetch(`/api/runs/${id}/verify`, { method: 'POST' }); }
+    catch (e) { reportClientError('startVerification', e.message, e.stack); return; }
+    const b = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (b.job) renderVerification(b.job);
+      else reportClientError('startVerification', b.error || `HTTP ${res.status}`);
+      return;
+    }
+    renderVerification(b.job);
+    if (verifyTimer) clearInterval(verifyTimer);
+    verifyTimer = setInterval(() => pollVerification(id), 1500);
+  }
+  $('verifyBtn').onclick = () => { if (currentId) startVerification(currentId); };
+  $('verifyCancelBtn').onclick = async () => {
+    if (!currentId) return;
+    await fetch(`/api/runs/${currentId}/verification/cancel`, { method: 'POST' }).catch(() => {});
+    pollVerification(currentId);
+  };
+
+  // ---------------------------------------------------------------
+  // 崩溃恢复：上次进程在落盘窗口内被杀时，显示「哪些已落盘 / 哪些消失 / 哪些冲突」，
+  // 由用户明确选择回滚或保留。回滚会自动跳过冲突文件（不覆盖用户后续修改）。
+  // ---------------------------------------------------------------
+  function setRecoveryPanelVisible(on) {
+    $('recoveryPanel').style.display = on ? 'flex' : 'none';
+  }
+  function renderRecovery(report) {
+    if (!report || !['pending', 'conflict', 'legacy', 'repo_missing'].includes(report.status)) {
+      setRecoveryPanelVisible(false);
+      return;
+    }
+    setRecoveryPanelVisible(true);
+    const c = report.counts || {};
+    const bits = [];
+    if (c.applied) bits.push(`已落盘 ${c.applied}`);
+    if (c.missing) bits.push(`文件消失 ${c.missing}`);
+    if (c.conflict) bits.push(`冲突 ${c.conflict}`);
+    if (c.tmpLeftovers) bits.push(`临时残留 ${c.tmpLeftovers}`);
+    if (report.autoRestored && report.autoRestored.length) bits.push(`已自动恢复 ${report.autoRestored.length}`);
+    $('recoveryTitle').textContent =
+      report.status === 'conflict'
+        ? '崩溃恢复：存在冲突，需人工确认'
+        : report.status === 'legacy'
+          ? '崩溃恢复：旧任务无落盘日志，只能人工比对'
+          : '崩溃恢复：上次落盘被中断';
+    $('recoveryStatus').textContent = bits.join(' · ') || report.status;
+    const lines = (report.files || []).map((f) => {
+      const action = { none: '无需处理', rollback: '可回滚', restore_backup: '可恢复备份', manual_review: '需人工处理', auto_restored: '已自动恢复' }[f.action] || f.action;
+      return `${f.relPath} — ${f.observed} / ${action}${f.note ? `：${f.note}` : ''}`;
+    });
+    if (report.note) lines.unshift(report.note);
+    $('recoveryDetail').textContent = lines.join('\n') || '没有可显示的明细。';
+    $('recoveryRollbackBtn').disabled = report.status === 'legacy' || report.status === 'repo_missing';
+    $('recoveryAcceptBtn').disabled = report.status === 'repo_missing';
+  }
+  async function loadRecovery(id) {
+    try {
+      const b = await (await fetch(`/api/runs/${id}/recovery`)).json();
+      renderRecovery(b.report);
+    } catch (e) {
+      reportClientError('loadRecovery', e.message, e.stack);
+    }
+  }
+  async function decideRecovery(id, action) {
+    const label = action === 'rollback' ? '回滚本次已落盘的改动' : '保留当前仓库状态';
+    if (!confirm(`${label}？\n\n回滚会自动跳过与原文/本次写入都不一致的冲突文件；冲突文件不会被覆盖。`)) return;
+    let res;
+    try {
+      res = await fetch(`/api/runs/${id}/recovery/${action}`, { method: 'POST' });
+    } catch (e) {
+      reportClientError('decideRecovery', e.message, e.stack);
+      return;
+    }
+    const b = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(b.error || `HTTP ${res.status}`);
+      return;
+    }
+    renderRecovery(b.report);
+    await refreshResult(id);
+  }
+  $('recoveryRollbackBtn').onclick = () => { if (currentId) decideRecovery(currentId, 'rollback'); };
+  $('recoveryAcceptBtn').onclick = () => { if (currentId) decideRecovery(currentId, 'accept'); };
+
+  async function refreshResult(id) {
+    const r = await (await fetch('/api/runs/' + id)).json();
+    renderStatus(r.status); renderStats(r);
+    if (r.finalAnswer) showAnswer(r.finalAnswer, false);
+    if (r.failureReason) showAnswer('失败原因: ' + r.failureReason + (r.triggeredLimit ? ` (触发限制: ${r.triggeredLimit})` : ''), true);
+    if (['completed','failed','cancelled','limit_reached','awaiting_user'].includes(r.status)) finalizeConversation(id, r);
+    // 杂项任务：渲染结构化结论（含改派建议）
+    renderMiscReport(r.misc, id, r.goal, r.runType);
+    // 编排任务：渲染汇总报告 + 子任务明细
+    renderOrchestrationReport(r, id);
+    // 部分成功要在状态徽标上直接可见（否则"completed"会被误读为全部成功）
+    if (r.orchestration && r.orchestration.partial) {
+      const st = r.orchestration.subtasks || {};
+      renderStatus(r.status, `部分成功：${st.failed ?? 0} 失败 / ${st.cancelled ?? 0} 取消 / ${st.limited ?? 0} 限流截断`);
+    }
+    // 终态 + 有仓库的任务：显示「深度验证（L2）」入口；运行中的任务不显示（避免与 Agent 同时改文件）
+    const terminal = ['completed','failed','cancelled','limit_reached','awaiting_user'].includes(r.status);
+    const withRepo = ['codebase','misc','orchestrator'].includes(r.runType);
+    if (terminal && withRepo) {
+      loadVerification(id, true);
+      loadRecovery(id);
+    } else {
+      setVerifyPanelVisible(false);
+      setRecoveryPanelVisible(false);
+    }
+    return r;
+  }
+
+  // ---------------- 视图 tab 切换 ----------------
+  document.querySelectorAll('.tabs button').forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll('.tabs button').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      ['live','events','trace','errors'].forEach((t) => $('tab-' + t).classList.toggle('hide', b.dataset.tab !== t));
+      if (b.dataset.tab === 'trace' && currentId) fetchTrace(currentId);
+      if (b.dataset.tab === 'errors') fetchErrorSummary();
+    };
+  });
+
+  // ---------------- 错误聚合：高频错误 TOP（按 code+location，解决 R5） ----------------
+  async function fetchErrorSummary() {
+    try {
+      const [sum, rec] = await Promise.all([
+        (await fetch('/api/errors?view=summary&limit=20')).json(),
+        (await fetch('/api/errors?limit=10')).json(),
+      ]);
+      $('errMeta').textContent = `缓存 ${sum.total ?? 0} 条 · 聚合 ${(sum.groups || []).length} 组 · 扫描 ${sum.scanned ?? 0} 条`;
+      const gs = sum.groups || [];
+      $('errGroups').innerHTML = gs.length
+        ? '<table class="err-table"><thead><tr><th>次数</th><th>错误码</th><th>位置</th><th>最近一次</th><th>样例消息</th><th>排查建议</th></tr></thead><tbody>' +
+          gs
+            .map(
+              (g) =>
+                `<tr><td style="text-align:right;font-weight:700">${g.count}</td>` +
+                `<td><code>${escapeHtml(String(g.code))}</code></td>` +
+                `<td><code>${escapeHtml(String(g.location ?? '(无位置)'))}</code></td>` +
+                `<td class="meta">${escapeHtml(String(g.lastAt || '').replace('T', ' ').slice(0, 19))}</td>` +
+                `<td>${escapeHtml(String(g.sampleMessage || '').slice(0, 120))}</td>` +
+                `<td class="meta">${escapeHtml(String(g.hint || '').slice(0, 140))}</td></tr>`,
+            )
+            .join('') +
+          '</tbody></table>'
+        : '<div class="meta" style="color:#16a34a">最近没有错误记录 ✅</div>';
+      const rs = rec.errors || [];
+      $('errRecent').innerHTML = rs.length
+        ? rs
+            .map(
+              (r) =>
+                `<div class="meta" style="margin:4px 0">[${escapeHtml(String(r.source || '?'))}] ` +
+                `<b>${escapeHtml(String(r.code || ''))}</b> @ ${escapeHtml(String(r.location ?? '-'))} — ` +
+                `${escapeHtml(String(r.message || '').slice(0, 160))}</div>`,
+            )
+            .join('')
+        : '<div class="meta" style="color:#6b7280">—</div>';
+    } catch (e) {
+      $('errGroups').innerHTML = `<div class="meta" style="color:#dc2626">拉取失败：${escapeHtml(String((e && e.message) || e))}</div>`;
+    }
+  }
+  $('errRefresh').onclick = fetchErrorSummary;
+
+  // ---------------- 可视化监控：拉取 trace 快照 ----------------
+  async function fetchTrace(id) {
+    try {
+      const snap = await (await fetch('/api/runs/' + id + '/trace')).json();
+      renderTrace(snap);
+    } catch { /* 尚未就绪 */ }
+  }
+
+  const KIND_COLOR = { run: '#16a34a', llm: '#2563eb', tool: '#7c3aed', subtask: '#4f46e5', answer: '#d97706' };
+  const KIND_LABEL = { run: '整体', llm: '推理', tool: '工具', subtask: '子 Agent', answer: '答案' };
+  const STATUS_BADGE = { ok: ['成功', '#15a34a'], error: ['失败', '#dc2626'], cancelled: ['中止', '#b45309'], running: ['进行中', '#2563eb'], skipped: ['跳过', '#6b7280'] };
+
+  function renderTrace(snap) {
+    if (!snap || !snap.spans) return;
+    const s = snap.summary || {};
+    $('traceSummary').innerHTML = `
+      <div class="stat"><b>${s.totalDurationMs?.toFixed(1) ?? 0}ms</b><span>总耗时</span></div>
+      <div class="stat"><b>${s.llmCalls ?? 0}</b><span>推理次数</span></div>
+      <div class="stat"><b>${s.toolCalls ?? 0}</b><span>工具次数</span></div>
+      <div class="stat"><b>${(s.llmTotalMs ?? 0).toFixed(1)}ms</b><span>推理耗时</span></div>
+      <div class="stat"><b>${(s.toolTotalMs ?? 0).toFixed(1)}ms</b><span>工具耗时</span></div>`;
+    renderFlow(snap.spans);
+    renderWaterfall(snap.spans, snap.rootId);
+  }
+
+  function renderFlow(spans) {
+    const ordered = [...spans].sort((a, b) => a.startTs - b.startTs);
+    let html = '';
+    for (let i = 0; i < ordered.length; i++) {
+      const sp = ordered[i];
+      const dur = sp.durationMs != null ? `${+sp.durationMs.toFixed(1)}ms` : '';
+      const color = sp.status === 'error' ? '#dc2626' : KIND_COLOR[sp.kind] || '#6b7280';
+      let sub = '';
+      if (sp.kind === 'run') sub = sp.inputs?.goal ? `输入：${String(sp.inputs.goal).slice(0, 80)}` : '任务开始';
+      else if (sp.kind === 'llm') {
+        const tools = sp.outputs?.toolNames?.length ? sp.outputs.toolNames.join(', ') : '';
+        sub = tools ? `决策 → 调用：${tools}` : `决策 → ${sp.outputs?.stopReason ?? '结束'}`;
+      } else if (sp.kind === 'tool') sub = `结果返回 · ${sp.status === 'ok' ? '成功' : sp.error?.code ?? '失败'}`;
+      else if (sp.kind === 'answer') sub = '输出：最终答案';
+      const badge = STATUS_BADGE[sp.status] || ['', '#6b7280'];
+      html += `<div class="fnode ${sp.kind} ${sp.status === 'error' ? 'error' : ''}">
+        <span class="icon" style="background:${color}"></span>
+        <div class="body"><div class="nm">${KIND_LABEL[sp.kind] || sp.kind} · ${escapeHtml(sp.name)}</div>
+        <div class="sub">${escapeHtml(sub)}</div></div>
+        <span class="badge" style="color:${badge[1]};background:${badge[1]}18">${badge[0]}</span>
+        <span class="dur">${dur}</span>
+      </div>`;
+      if (i < ordered.length - 1) html += `<div class="farrow">↓</div>`;
+    }
+    $('flow').innerHTML = html || '<div class="meta">暂无数据</div>';
+  }
+
+  function renderWaterfall(spans, rootId) {
+    const ordered = [...spans].sort((a, b) => a.startTs - b.startTs);
+    if (!ordered.length) { $('waterfall').innerHTML = ''; return; }
+    const t0 = Math.min(...ordered.map((s) => s.startTs));
+    const t1 = Math.max(...ordered.map((s) => (s.endTs ?? s.startTs) + 1));
+    const total = Math.max(1, t1 - t0);
+    const W = 660, LH = 20, GAP = 4, left = 8, plotW = W - left - 8;
+    const H = ordered.length * (LH + GAP) + 24;
+    const x = (ts) => left + ((ts - t0) / total) * plotW;
+    const w = (d) => Math.max(2, (d / total) * plotW);
+
+    let rows = '';
+    ordered.forEach((sp, i) => {
+      const y = 22 + i * (LH + GAP);
+      const color = sp.status === 'error' ? '#dc2626' : KIND_COLOR[sp.kind] || '#6b7280';
+      const d = sp.durationMs ?? 0;
+      rows += `<rect x="${x(sp.startTs).toFixed(1)}" y="${y}" width="${w(Math.max(0.5, d)).toFixed(1)}" height="${LH}" rx="3" fill="${color}" opacity="${sp.kind === 'answer' ? 0.9 : 0.85}">
+        <title>${escapeHtml(sp.name)} · ${+d.toFixed(1)}ms · ${sp.status}</title></rect>`;
+      rows += `<text x="${(x(sp.startTs) + w(Math.max(0.5, d)) + 6).toFixed(1)}" y="${y + 13.5}" font-size="11" fill="#374151">${escapeHtml(sp.name)} · ${+d.toFixed(1)}ms</text>`;
+    });
+    let ticks = '';
+    for (let i = 0; i <= 4; i++) {
+      const px = left + (plotW * i) / 4;
+      const ms = (total * i) / 4;
+      ticks += `<line x1="${px}" y1="18" x2="${px}" y2="22" stroke="#9ca3af"/><text x="${px}" y="14" font-size="10" fill="#6b7280" text-anchor="middle">${ms.toFixed(0)}ms</text>`;
+    }
+    $('waterfall').innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:520px" xmlns="http://www.w3.org/2000/svg">${ticks}${rows}</svg>`;
+  }
+
+  // =========================================================================
+  // 启动任务
+  // =========================================================================
+  // ---- 对话持久化与恢复（后端 ContextStore 为权威层，localStorage 做本机缓存）----
+  function rememberConversation(runId, patch) {
+    try {
+      const list = loadLs(LS.conversations, []);
+      const i = list.findIndex((c) => c.runId === runId);
+      const cur = i >= 0 ? list[i] : { runId };
+      const next = { ...cur, ...patch, ts: Date.now() };
+      if (i >= 0) list[i] = next; else list.unshift(next);
+      saveLs(LS.conversations, list.slice(0, 50));
+      saveLs(LS.lastSession, runId);
+      renderConversationHistory();
+    } catch { /* 忽略 */ }
+  }
+  /** 把已完成的问答渲染进「对话记录」（会话内累积，不因新提问清空） */
+  function renderConversationHistory() {
+    try {
+      const box = $('conversationLog');
+      if (!box) return;
+      const list = loadLs(LS.conversations, []);
+      if (!list.length) { box.innerHTML = '<div class="meta" style="color:#6b7280">还没有对话。每次完成后，问答会自动累积在这里。</div>'; return; }
+      box.innerHTML = list.map((c, idx) => {
+        const answer = c.answer || (c.status === 'running' ? '（进行中…）' : '（无结论）');
+        return `<div class="conv ${escapeHtml(c.status || '')}" data-idx="${idx}">` +
+          `<div class="q">${escapeHtml(c.goal || '(空)')}</div>` +
+          `<div class="a">${escapeHtml(String(answer).slice(0, 2000))}</div>` +
+          `<div class="meta">${escapeHtml(c.status || '')} · ${new Date(c.ts).toLocaleString()}</div>` +
+          `</div>`;
+      }).join('');
+    } catch { /* 忽略 */ }
+  }
+  // 点击历史问题 → 回填到输入框（事件委托，避免内联 onclick 的转义坑）
+  (function bindConvClick() {
+    const box = $('conversationLog');
+    if (!box) return;
+    box.addEventListener('click', (e) => {
+      const q = e.target.closest('.q');
+      if (!q) return;
+      const idx = Number(q.parentElement?.dataset.idx);
+      const c = loadLs(LS.conversations, [])[idx];
+      if (c && c.goal) { $('goal').value = c.goal; autoGrow(); }
+    });
+  })();
+  async function saveSessionOnStart(runId, goal, runType) {
+    rememberConversation(runId, { goal, runType, status: 'running' });
+    try {
+      const sid = 'run_' + runId;
+      await fetch('/api/context', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: sid, title: goal }) });
+      await fetch(`/api/context/${sid}/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: 'user', content: goal }) });
+    } catch (e) { reportClientError('saveSessionOnStart', e.message, e.stack); }
+  }
+  async function finalizeConversation(id, r) {
+    const answer = r.finalAnswer || (r.failureReason ? `失败: ${r.failureReason}` : '');
+    rememberConversation(id, { goal: r.goal, runType: r.runType, status: r.status, answer });
+    try {
+      const done = loadLs(LS.finalized, []);
+      if (done.includes(id)) return;   // 幂等：已补录过（刷新/重复 refresh 不重复写 turn）
+      const sid = 'run_' + id;
+      const role = (r.status === 'completed' || r.status === 'awaiting_user') ? 'assistant' : 'system';
+      const text = r.finalAnswer || `失败: ${r.failureReason || r.status}`;
+      await fetch(`/api/context/${sid}/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role, content: text }) });
+      // 入库（可检索 + 语义嵌入，collection 'runs'）
+      await fetch('/api/data', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        collection: 'runs', itemId: id, type: r.runType, tags: [r.status, r.runType],
+        content: { goal: r.goal, finalAnswer: r.finalAnswer, failureReason: r.failureReason, status: r.status, runType: r.runType },
+        actor: id,
+      }) });
+      done.push(id);
+      saveLs(LS.finalized, done.slice(-200));
+    } catch (e) { reportClientError('finalizeConversation', e.message, e.stack); }
+  }
+  function restoreLastSession() {
+    try {
+      const list = loadLs(LS.conversations, []);
+      if (!list.length) return;   // 无历史 → 保留默认演示目标
+      const lastId = loadLs(LS.lastSession, null);
+      const last = list.find((c) => c.runId === lastId) || list[0];
+      if (last && last.goal) {
+        $('goal').value = last.goal;
+        autoGrow();
+      }
+    } catch { /* 忽略 */ }
+  }
+  // 记住上次填写的仓库/工作区路径与选择的任务类型（localStorage，下次打开自动回填）
+  function persistWorkspacePrefs() {
+    try {
+      const rp = $('repoPath').value.trim();
+      if (rp) saveLs(LS.repoPath, rp);
+      saveLs(LS.runType, $('runType').value);
+    } catch { /* 忽略 */ }
+  }
+  function restoreWorkspacePrefs() {
+    try {
+      const rp = loadLs(LS.repoPath, null);
+      if (rp) $('repoPath').value = rp;
+      const rt = loadLs(LS.runType, null);
+      if (rt && ['auto','codebase','misc','orchestrator','research'].includes(rt)) {
+        $('runType').value = rt;
+        showFields();   // 恢复的任务类型要联动字段显隐（此时 showFields 已跑过一次默认值）
+      }
+    } catch { /* 忽略 */ }
+  }
+
+  // 底部输入框：自动增高（WorkBuddy 式）+ Ctrl/Cmd+Enter 提交
+  const goalTa = $('goal');
+  const autoGrow = () => { goalTa.style.height = 'auto'; goalTa.style.height = Math.min(160, goalTa.scrollHeight) + 'px'; };
+  /** 解析 goal 中的 @相对路径，提取为 contextFiles 并在 UI 上展示 */
+  function parseContextFiles() {
+    const text = goalTa.value;
+    const matches = [...text.matchAll(/@([^\s\n]+)/g)].map((m) => m[1]);
+    const uniq = [...new Set(matches)];
+    const box = $('ctxPills');
+    if (!uniq.length) { box.innerHTML = ''; return; }
+    box.innerHTML = uniq.map((f) => `<span class="ctx-pill">@${escapeHtml(f)}</span>`).join('');
+  }
+  goalTa.addEventListener('input', () => { autoGrow(); parseContextFiles(); });
+  goalTa.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !$('startBtn').disabled) {
+      e.preventDefault();
+      $('startBtn').click();
+    }
+  });
+  parseContextFiles();
+  autoGrow();
+  restoreLastSession();
+  restoreWorkspacePrefs();
+  renderConversationHistory();
+
+  // =========================================================================
+  // 写能力意图确认（M1'）：goal 命中「修改文件」意图、但当前设置不会真的改文件时，
+  // 弹出可见的确认对话框——把「静默只读」变成「用户可见的决策点」。
+  // 选择「去开启」= 切到编排模式并勾选写开关；真正的改动仍会在沙箱验证后由审批卡逐次确认。
+  // =========================================================================
+  const WRITE_INTENT_RE = /修改|改动|改成|改为|新建|创建.{0,4}文件|删除.{0,4}文件|删掉|移除.{0,4}文件|重命名|重构|refactor|rename|edit[\s_-]*file/i;
+  let writeIntentBypass = false;   // 用户在对话框中选「仍以只读提交」后，放行本次提交一次
+
+  function showWriteIntentDialog(kind, onProceed) {
+    const needSwitch = kind === 'switch';
+    const isDisabled = kind === 'disabled';
+    const mask = document.createElement('div');
+    mask.className = 'wmask';
+    mask.innerHTML =
+      '<div class="wmodal" role="dialog" aria-modal="true" aria-label="写能力确认">' +
+        '<div class="wmtitle">' + (isDisabled
+          ? '检测到「修改文件」的意图——但写能力已被部署禁用'
+          : '检测到「修改文件」的意图' + (needSwitch ? '——但当前任务类型不会改动文件' : '——但「允许修改文件」未勾选')) + '</div>' +
+        '<div class="wmbody">' +
+          (isDisabled
+            ? '本服务部署时设置了 CODEBASE_WRITE_ENABLED=false，任何任务都无法修改文件。本次将以只读方式运行。'
+            : (needSwitch
+              ? '当前任务按「<b>' + escapeHtml($('runType').value) + '</b>」执行，只做只读分析，<b>不会修改任何文件</b>。<br/><br/>要真正修改文件：点击「去开启写能力」将自动切到「多 Agent 编排」模式并勾选开关，然后点「开始任务」提交。'
+              : '写能力开关当前<b>未勾选</b>——本次任务将只读运行，<b>不会改动任何文件</b>。<br/><br/>点击「去勾选该开关」后，重新点「开始任务」即可允许改动。') +
+              '<br/><br/><span style="color:#6b7280">勾选后，改动会先进入 Docker 沙箱跑检查阶梯（语法/类型/测试），并在<b>落盘前弹出审批卡</b>，由你逐次确认（完全同意此文件 / 仅同意本次 / 拒绝）。</span>') +
+        '</div>' +
+        '<div class="wmactions">' +
+          (isDisabled
+            ? '<button class="btn-primary wm-proceed" type="button">知道了，以只读方式提交</button>'
+            : '<button class="btn-ghost wm-proceed" type="button">仍以只读方式提交</button>' +
+              '<button class="btn-primary wm-adjust" type="button">' + (needSwitch ? '去开启写能力' : '去勾选该开关') + '</button>') +
+        '</div>' +
+      '</div>';
+    const close = () => mask.remove();
+    mask.querySelector('.wm-proceed').onclick = () => { close(); onProceed(); };
+    const adjust = mask.querySelector('.wm-adjust');
+    if (adjust) adjust.onclick = () => { close(); gotoWriteSetup(needSwitch); };
+    mask.addEventListener('click', (e) => { if (e.target === mask) close(); });   // 点遮罩关闭 = 取消本次提交
+    document.body.appendChild(mask);
+  }
+
+  /** 「去开启写能力」：切到编排模式（若需）→ 勾选写开关 → 滚动并高亮，让用户看到开关位置 */
+  function gotoWriteSetup(needSwitch) {
+    if (needSwitch) {
+      const rt = $('runType');
+      rt.value = 'orchestrator';
+      rt.dispatchEvent(new Event('change'));   // 联动 orchestrationFields 显隐 + 加载契约清单
+    }
+    const cb = $('allowWriteSpecs');
+    if (cb && !cb.disabled) cb.checked = true;
+    setTimeout(() => {
+      const anchor = cb ? (cb.closest('label') || cb) : null;
+      if (anchor) {
+        try { anchor.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch { /* 忽略 */ }
+        anchor.classList.add('flash');
+        setTimeout(() => anchor.classList.remove('flash'), 2600);
+      }
+      syncWriteWhitelistNote();
+    }, 80);
+  }
+
+  $('startBtn').onclick = async () => {
+    const runType = effectiveRunType();
+    if (isAuto() && lastRouting) {
+      $('routeNote').innerHTML = `🎯 本次按建议使用 <b>${escapeHtml(runType)}</b>（置信度 ${escapeHtml(lastRouting.confidence)}）：${escapeHtml(lastRouting.reason)}`;
+    }
+    // M1'（写能力）：修改意图确认——命中「修改文件」意图但当前设置不会真的改文件时，
+    // 先弹出可见对话框（避免"静默只读"：既不改、也不说明）。用户选择后放行或去开启。
+    if (!writeIntentBypass && WRITE_INTENT_RE.test(String($('goal').value || ''))) {
+      const wcb = $('allowWriteSpecs');
+      const writeReady = runType === 'orchestrator' && wcb && !wcb.disabled && wcb.checked;
+      if (!writeReady) {
+        const kind = wcb && wcb.disabled ? 'disabled' : (runType === 'orchestrator' ? 'check' : 'switch');
+        showWriteIntentDialog(kind, () => { writeIntentBypass = true; $('startBtn').click(); });
+        return;
+      }
+    }
+    writeIntentBypass = false;
+    const body = {
+      runType,
+      goal: $('goal').value,
+      maxSteps: Number($('maxSteps').value) || undefined,
+      maxModelCalls: Number($('maxModelCalls').value) || undefined,
+      maxToolCalls: Number($('maxToolCalls').value) || undefined,
+      totalTimeoutMs: Number($('totalTimeout').value) || undefined,
+      mockScenario: $('mockScenario').value || undefined,
+      stream: { liveDeltas: $('liveDeltas').checked },
+      // @路径 语法解析为 contextFiles，供后端注入优先读取提示
+      contextFiles: (() => {
+        const matches = [...$('goal').value.matchAll(/@([^\s\n]+)/g)].map((m) => m[1]);
+        return [...new Set(matches)].slice(0, 20) || undefined;
+      })(),
+      // 多轮上下文：把之前已完成的问答带过去，让模型「记住」前文做 follow-up
+      contextHistory: (() => {
+        try {
+          const list = loadLs(LS.conversations, []);
+          const done = list.filter((c) => c.answer && c.answer !== '（进行中…）').reverse().slice(0, 6);
+          // R18：标注每轮的任务模式——历史跨模式传递时防止模型把别模式的能力/操作误认（见 docs/WRITE_PRINCIPLES.md、RUN_REVIEW_2026-10-16）
+          return done.map((c) => [{ role: 'user', content: `[模式:${c.runType || '未知'}] ${c.goal}` }, { role: 'assistant', content: c.answer }]).flat();
+        } catch { return undefined; }
+      })(),
+      // 归纳摘要：超出最近 6 轮的更早对话，压缩成一段文本，防止早期重要上下文丢失
+      contextSummary: (() => {
+        try {
+          const list = loadLs(LS.conversations, []);
+          const done = list.filter((c) => c.answer && c.answer !== '（进行中…）').reverse();
+          const older = done.slice(6);
+          if (!older.length) return undefined;
+          return older.map((c) => `问[模式:${c.runType || '未知'}]: ${(c.goal || '').slice(0, 120)}\n答: ${String(c.answer || '').slice(0, 160)}`).join('\n').slice(0, 4000);
+        } catch { return undefined; }
+      })(),
+    };
+    if (NEEDS_WORKSPACE.includes(runType)) {
+      const rp = $('repoPath').value.trim();
+      // 前端先自己拦一次：给出比服务端 400 更直白的定位提示（指出是哪个字段）
+      if (!rp) {
+        showAnswer('创建失败: 该任务类型需要「仓库 / 工作区路径」（repoPath），请在左侧填写后再提交。', true);
+        setPhase('缺少参数', 'error');
+        return;
+      }
+      body.repoPath = rp;
+    }
+    if (runType === 'misc') {
+      body.misc = { subtask: $('miscSubtask').value || undefined };
+      // 杂项默认收紧预算（服务端还有硬上限，放宽也不会生效）
+      if (!Number($('maxSteps').value)) body.maxSteps = 6;
+    }
+    if (runType === 'orchestrator') {
+      const specs = $('orchSpecs').value.trim();
+      body.orchestration = {
+        maxWidth: Number($('orchMaxWidth').value) || undefined,
+        allowedSpecs: specs ? specs.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+        allowSelfTools: $('orchSelfTools').checked,
+        // M1'：本 run 写能力授权（界面「允许修改文件」开关）——未勾选 = 只读（fail-closed）
+        allowWriteSpecs: $('allowWriteSpecs').checked,
+        strictVerify: $('strictVerify').checked,
+      };
+    }
+    else body.research = { topics: $('topics').value ? $('topics').value.split(',').map(s=>s.trim()) : undefined,
+      allowedDomains: $('allowedDomains').value ? $('allowedDomains').value.split(',').map(s=>s.trim()) : undefined };
+    // Token 预算（Runtime 强制）：留空=不限制；0 / 负数 / 小数必须在提交前拦下，
+    // 不能再用 `|| undefined` 静默变成“不限”（后端会 400，前端应先给直白提示）。
+    const tokenBudgetRaw = $('tokenBudget').value.trim();
+    const tokenBudget = tokenBudgetRaw === '' ? undefined : Number(tokenBudgetRaw);
+    if (tokenBudget !== undefined && (!Number.isInteger(tokenBudget) || tokenBudget < 1)) {
+      showAnswer('创建失败: 任务 Token 预算必须是 ≥1 的整数；留空表示不限制。', true);
+      setPhase('参数错误', 'error');
+      return;
+    }
+    body.tokenBudget = tokenBudget;
+    // 费用预算：0 / 空 = 不限制（0 不发给后端）
+    body.costBudgetUsd = Number($('costBudget').value) || undefined;
+
+    // LLM 配置：预设 + Base URL + 模型 + 生成参数（Key 只在本次运行使用）
+    const key = $('llmApiKey').value.trim();
+    const baseUrl = $('llmBaseUrl').value.trim();
+    const model = currentModel();
+    const params = collectParams();
+    const realMode = $('llmMode').value === 'openai';
+    if (realMode || key || model) {
+      body.llm = {
+        mode: $('llmMode').value,
+        provider: $('llmProvider').value || undefined,
+        apiKey: key || undefined,
+        baseUrl: baseUrl || undefined,
+        model: model || undefined,
+        params: Object.keys(params).length ? params : undefined,
+      };
+    }
+    const sKey = $('serperKey').value.trim();
+    if ($('searchProvider').value === 'serper' || sKey) body.search = { provider: $('searchProvider').value, apiKey: sKey || undefined };
+    persistKeysIfNeeded();
+
+    let res;
+    try { res = await fetch('/api/runs', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) }); }
+    catch (e) { showAnswer('网络错误: ' + e.message, true); return; }
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { msg = (await res.json()).error || msg; } catch {}
+      showAnswer('创建失败: ' + msg, true);
+      setPhase('创建失败', 'error');
+      return;
+    }
+    const created = await res.json();
+    const runId = created.runId;
+    currentId = runId;
+    saveSessionOnStart(runId, body.goal, runType);
+    renderEffectiveLlm(created.llm);
+    if (created.miscLimits) {
+      const L = created.miscLimits;
+      const box = $('testResult');
+      box.className = 'note info';
+      box.classList.remove('hide');
+      box.innerHTML += '<br/>' + escapeHtml(
+        `杂项边界：最多 ${L.maxSteps} 步 / ${L.maxModelCalls} 次模型调用 / ${L.maxToolCalls} 次工具调用 / ${L.tokenBudget} tokens；` +
+        `工具白名单 ${L.allowedTools.join(', ')}（只读，无命令/联网/写入）`,
+      );
+    }
+    $('events').innerHTML = ''; $('events').dataset.placeholder = '1';
+    showAnswer('—', false); $('sources').innerHTML = ''; $('miscReport').innerHTML = ''; $('orchReport').innerHTML = '';
+    $('flow').innerHTML = '<div class="meta">等待执行…</div>'; $('waterfall').innerHTML = '';
+    renderStatus('running');
+    setVerifyPanelVisible(false); renderVerification(null);
+    stopPolling();
+    liveReset(body.goal);
+    $('cancelBtn').disabled = false; $('startBtn').disabled = true;
+
+    if (es) { try { es.close(); } catch {} }
+    es = new EventSource('/api/runs/' + runId + '/stream');
+    LIVE.conn = 'connecting';
+    es.onopen = () => { LIVE.conn = 'open'; if (LIVE.debug) renderDiag(); };
+    es.onmessage = async (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === '_stream_meta') {
+        LIVE.meta = msg;
+        LIVE.conn = 'open';
+        if (LIVE.debug) renderDiag();
+        refreshPendingApprovals(runId);   // SSE 建连（含刷新/重连回放）后重建待批卡
+        return;
+      }
+      if (msg.type === 'run_end') {
+        LIVE.conn = 'closed';
+        PENDING_APPROVALS.clear();   // 终态：不可能再有挂起审批（超时/取消都会解挂）
+        updatePendingBadge();
+        stopTick();
+        stopPolling();
+        const r = await refreshResult(runId);
+        await loadSources(runId);
+        try { es.close(); } catch {}
+        $('cancelBtn').disabled = true; $('startBtn').disabled = false;
+        fetchTrace(runId);
+        const el = $('liveMetrics');
+        if (el) el.textContent = liveMetricsText(r.totalDurationMs);
+        if (LIVE.debug) renderDiag();
+        return;
+      }
+      applyLiveEvent(msg);
+      addEvent(msg);
+      scheduleTraceRefresh(runId);
+    };
+    es.onerror = () => {
+      LIVE.conn = 'error';
+      if (LIVE.debug) renderDiag();
+      // SSE 断开：浏览器会自动重连（带 Last-Event-ID）；同时启动轮询兜底，避免窗口期丢帧
+      if (es.readyState === EventSource.CLOSED || es.readyState === EventSource.CONNECTING) startPolling(runId);
+    };
+  };
+
+  function scheduleTraceRefresh(id) {
+    if (traceTimer) return;
+    traceTimer = setTimeout(() => {
+      traceTimer = null;
+      if (currentId === id && !$('tab-trace').classList.contains('hide')) fetchTrace(id);
+    }, 700);
+  }
+
+  $('cancelBtn').onclick = async () => {
+    if (!currentId) return;
+    await fetch('/api/runs/' + currentId + '/cancel', { method:'POST' });
+    renderStatus('cancelled');
+  };
+
+  async function loadSources(id) {
+    const r = await (await fetch('/api/runs/' + id)).json();
+    let html = '';
+    const evs = await (await fetch('/api/runs/' + id + '/events')).json();
+    for (const e of evs) {
+      const d = e.data || {};
+      const url = d.url || (d.results && d.results[0] && d.results[0].url);
+      if (url) html += `<div class="src">· <a href="${url}" target="_blank" rel="noopener">${url}</a></div>`;
+    }
+    $('sources').innerHTML = html || (r.isMock ? '<div class="src">（Mock 模式，来源为离线资料，非真实联网）</div>' : '');
+  }
+</script>
+</body>
+</html>

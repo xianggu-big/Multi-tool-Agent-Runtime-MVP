@@ -1,0 +1,46 @@
+# 依赖
+node_modules/
+
+# 运行时数据（SQLite 数据库 / 沙箱副本 / 备份）
+data/
+
+# 环境变量与密钥（.env.example 不受影响）
+.env
+.env.local
+
+# 构建产物
+dist/
+*.tsbuildinfo
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+.DS_Store
+
+# 编辑器
+.vscode/
+.idea/
+
+# 工具记忆（机器本地，非源码；工作区根与 multi-tool-agent/ 两层都忽略）
+.workbuddy/
+
+# ZCode 会话/计划状态（机器本地，非源码）
+.zcode/
+
+# 生成物：按 run 的分层量化报告（`npm run report:run -- --all` 可全量重生成）
+# 每个 run 一份、且随每次 `npm test` 增长（实测 322 份 / 2.0MB）；真值在 data/*.db（同样不入库）→ 定位为本地证据缓存
+multi-tool-agent/reports/runs/
+# 编辑评测只跑单场景时的临时报告（正式报告是 reports/EDIT_EVAL.md）
+multi-tool-agent/reports/EDIT_EVAL.partial.md
+
+# 本机实测脚本与产物（含个人绝对路径，不随仓库发布）
+.eval/
+
+# 仓库级 agent skill 配置（个人工作流，非项目代码）
+.agents/
+
+# 生成物：单 run 报告 / 数据库
+reports/runs/
+*.db
+*.db-wal
+*.db-shm
