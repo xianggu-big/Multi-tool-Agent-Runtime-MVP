@@ -78,6 +78,25 @@
 
 ## 2026-10-22
 
+### 真实模型编辑评测：20/20（终点 A 第 3 条）
+
+**背景**：`eval:edit` 只证明「沙箱 / 审批 / 落盘 / 复验 / 回滚」管线按设计工作（脚本扮演模型，tokens=0），不能回答「真实模型能不能在这个链路里把活干成」，也无法给 README / 简历提供可复现的模型编辑成功率。
+
+**改动**：
+
+- 新增 `eval/edit-fixture/real/`（4 源文件 + 4 测试文件，基线 15/15）与 `scripts/edit-eval-real.ts`。
+- 20 条小任务（12 条修 bug、6 条新增/重构、2 条类型收紧）；每条复制独立 fixture，`setup` 注入缺陷，真实 `code-edit` 子 Agent 在 Docker 沙箱修改，自动 `allow_once`，落盘后宿主跑 4 个测试文件并校验目标源码。
+- 新增 `npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`；产物 `reports/EDIT_EVAL_REAL.md`，逐任务证据 `data/edit-eval-real/<stamp>/`（不入库）。
+- 修正评测有效性：`setup` 未命中的任务标 `invalid` 并排除分母；R11 断言接受 `size <= 0` 或等价的 `!(size > 0)`，同时要求错误文案含 `size must be > 0`。
+
+**结果**（证据 `data/edit-eval-real/20261022-131513-248/`，`deepseek-flash`）：**20/20 通过（100%）**，宿主 L2 **20/20**，审批 20 次，**611,890 tokens / $0.0172 / 平均 23.9s**。
+
+**边界**：20 条均为单文件、小函数级修改；不能外推到大型重构、多文件架构调整或长链路调试。自动审批只衡量「模型能否改对」，不代表人工审批体验；成本按 Provider 表价估算。
+
+**验证（当轮）**：`npm run typecheck` 0 错误；`npm test` **61 文件 / 416 子测试 / 416 通过 / 0 失败 / 0 跳过 / 约 23s**；`npm run agents:lint` 三项通过；`npm run eval:edit` 重跑 **7/7**（平均 12.7s / P95 14.1s）。
+
+**文件**：`scripts/edit-eval-real.ts`、`eval/edit-fixture/real/`、`reports/EDIT_EVAL_REAL.md`、`package.json`、`reports/{CHANGELOG,BUGFIX_LOG,PROJECT_REPORT}.md`、`README.md`、`docs/DEMO.md`、根 `AGENTS.md`。
+
 ### 运行测试改为「显式授权」：默认不进工具池
 
 - 背景：`CODEBASE_RUN_TESTS_ENABLED` 默认 false，但 codebase 工具池仍包含 `run_tests`。模型会调用 → 工具返回 `DISABLED` → 复盘显示「完成，但过程另有 1 类问题（DISABLED@run_tests）」。UI 主路径每次只读分析都会出现这条假问题。
@@ -111,7 +130,7 @@
 - 根因：`agents/*.md` 在 Windows 工作区是 CRLF，生成器输出 LF；`tests/23d` 与 `agents-lint` 严格比较字符串，把行尾当成内容。
 - 修复：两处比较前统一 `replace(/\r\n/g, '\n')`；生成器保持 LF。
 - 验证：`a698c71` + 两文件补丁在 `node:24` Linux 容器跑出 **395 通过 / 1 跳过 / 0 失败**；本机 416/416。
-- 遗留：尚未提交/推送，GitHub 上仍是红的；推送后再确认。
+- 推送 `f52ef4a` 后，run `39724718243` **全步骤绿**（npm ci / typecheck / agents:lint / npm test 均 success）；fresh-clone 冒烟同样 416/416。
 
 ## 2026-10-21
 

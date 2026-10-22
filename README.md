@@ -59,6 +59,7 @@ CODEBASE_WRITE_ENABLED=true npm start
 |---|---|
 | 一页读懂：能力 / 实测指标 / 风险 / 下一步 | `reports/PROJECT_REPORT.md` |
 | 写能力与三级审批的设计与终验清单 | `docs/WRITE_AND_APPROVAL.md` |
+| 编辑评测：管线 7/7 + 真实模型 20/20（`npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`） | `reports/EDIT_EVAL.md`、`reports/EDIT_EVAL_REAL.md` |
 | RAG 评测（三模式对比）与切块消融 | `reports/RAG_EVAL.md`、`reports/RAG_ABLATION.md` |
 | 并行 vs 串行 A/B（结论：该任务下编排贵 7×） | `reports/PARALLEL_AB.md` |
 | Provider 横评与复现命令 | `reports/PROVIDER_BENCHMARK.md` |

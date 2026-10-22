@@ -142,6 +142,7 @@ SSE 实时流：`GET /api/runs/:id/stream`（事件类型见 `docs/STREAMING_LIV
 ```bash
 node scripts/sandbox/build-image.mjs
 npm run eval:edit        # 7 个确定性场景，产物 reports/EDIT_EVAL.md
+npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000  # 20 条真实模型任务 → reports/EDIT_EVAL_REAL.md（约 $0.02）
 ```
 
 界面演示：
@@ -152,7 +153,9 @@ npm run eval:edit        # 7 个确定性场景，产物 reports/EDIT_EVAL.md
 4. 等审批卡出现：查看 diff → 选择「完全同意此文件 / 仅同意本次 / 拒绝」。
 5. 落盘后自动跑宿主复验；失败会自动回滚并保留 `change_rolled_back` 证据。
 
-预期：`npm run eval:edit` 最近一次基线 **7/7** 命中预期（5 次审批 / 4 文件落盘 / 1 回滚；本轮未重跑，改 Docker 相关代码后需重跑）。
+预期：`npm run eval:edit` 本轮（2026-10-22）重跑 **7/7** 命中预期（5 次审批 / 4 文件落盘 / 1 回滚；平均 12.7s / P95 14.1s）。改 Docker 相关代码后仍需重跑。
+
+真实模型层：`eval:edit:real` 最近一次为 **20/20 通过、L2 20/20、611,890 tokens / $0.0172 / 平均 23.9s**（DeepSeek Flash）。它只覆盖单文件小函数级修改，不能说成“模型能重写项目”。
 
 ---
 
@@ -182,6 +185,7 @@ LLM_MODE=openai LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=... npm start
 | `npm run rag:bench` | `reports/RAG_EVAL.md` |
 | `npm run rag:ablation` | `reports/RAG_ABLATION.md` |
 | `npm run eval:edit` | `reports/EDIT_EVAL.md`（需 Docker） |
+| `npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000` | `reports/EDIT_EVAL_REAL.md`（需 Docker + DEEPSEEK_API_KEY，约 $0.02） |
 | `npm run eval:compaction` | `reports/COMPACTION_AB.md`（需真实 Key，约 $0.03） |
 | `npm run security:redteam` | `reports/INJECTION_REDTEAM.md` |
 | `npm run digest:list` | 最近 run 的复盘（默认只看有问题的） |

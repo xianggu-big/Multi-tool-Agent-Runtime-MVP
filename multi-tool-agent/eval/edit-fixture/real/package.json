@@ -1,0 +1,9 @@
+{
+  "name": "mta-edit-eval-real-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --import tsx --test tests/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

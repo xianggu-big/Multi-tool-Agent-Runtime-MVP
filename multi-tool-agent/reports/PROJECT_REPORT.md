@@ -6,7 +6,7 @@
 > **项目工具**：`.agents/skills/{mta-verification,mta-reporting}/`（仓库级 Codex skill：验证/复跑流程、核心报告集 + 专项评测 + 收尾清单）
 > **安全审查**：2026-10-13 全面代码审查 + 对抗性测试（`reports/CODE_REVIEW_2026-10-13.md`）；**P0×2、P1×4 与 P2-1~P2-6 已修复并转为回归守卫（2026-10-19 收口）**，剩 P2-7（无鉴权，README 已声明仅本机）/ P3×3
 > **写能力**：2026-10-15 新增「沙箱 + 三级人工审批」受控写能力（M1）；2026-10-16 **M1' 接入 UI**（「允许修改文件」开关 + 修改意图确认对话框 + `allowWriteSpecs` 完整接线）；边界与缺口见 §4 R14/R15，验收与证据见 `docs/WRITE_AND_APPROVAL.md`
-> **编辑评测**：`npm run eval:edit` 已建 7 个确定性场景（真 Docker / 真审批 / 真落盘 / 宿主复验 / 回滚 / TOCTOU），当前 **7/7 命中预期**；产物 `reports/EDIT_EVAL.md`。它衡量**管线**，不是模型编辑智力（tokens=0）。
+> **编辑评测**：`npm run eval:edit` 是 7 个确定性管线场景 **7/7**（真 Docker / 真审批 / 真落盘 / 宿主复验 / 回滚 / TOCTOU；`reports/EDIT_EVAL.md`，tokens=0，衡量**管线**）；`npm run eval:edit:real` 是 20 条真实模型单文件任务 **20/20（L2 20/20）**，611,890 tokens / \$0.0172（`reports/EDIT_EVAL_REAL.md`，衡量**模型在该管线里的完成能力**，不外推大型重构）。
 > **安全评测**：`npm run security:redteam` 已建 42 条固定样本（恶意 / 正常 / 已知缺口），当前恶意检出 **20/22**、正常误报 **2/20**；产物 `reports/INJECTION_REDTEAM.md`。**是启发式降风险，不是“防住提示注入”**；纯 base64 / URL 编码仍漏检。
 > **高危审批**：删除 / 宿主命令批次不复用粘性，批准还必须在当前批次勾选二次确认；Runtime 缺 `confirmHighRisk` 时不 resolve、HTTP 返回 400。回归 `tests/53k/l/m`。
 > **上下文压缩（2026-10-20 修 400；2026-10-21 修 R23 质量衰减 + R25 水位语义；R24 前端复盘/压缩面板）**：M18 把切点强制对齐轮次边界（`alignCompactCut`），杜绝孤儿 tool 消息导致 OpenAI 兼容接口 400（现场 `run_mvge1343_49a18777` 第 16 步）；M22 改为**滚动摘要 + 压缩迟滞**——旧摘要原文保留、只压新增消息、首次压缩保留任务目标、活动区增长不足时不重复压；R25 把水位从「任务累计预算」改成**当前 promptTokens / 模型上下文窗口**（窗口未知才显式回退并标 `source=unknown`），`context_compacted` 与 `run_digest.compaction` 带窗口水位观测。回归 `tests/33e~33p`、`tests/56f`。真实 A/B 已完成（5 任务 × 2 策略 × 3 次 = 30 run，4K 模拟窗口）：30/30 完成、质量 100%，但 rolling 平均 tokens 比 legacy 多 1.8%、成本多 1.4%、耗时少 0.1%，未达预注册 15% 效率门槛，判定 `not_proven`（`reports/COMPACTION_AB.md`）；不声称滚动摘要更省或更快。边界：摘要上限 24000 字符后停止压缩；其余 Provider 窗口未补齐。
@@ -19,6 +19,7 @@
 |---|---|---|
 | **共享 Agent Loop** | ✅ 可用 | 一套循环驱动 4 个 Agent（codebase / research / misc / orchestrator），预算·权限·超时·检查点统一强制 |
 | **Codebase Agent** | ✅ 可用 | 真实本地 I/O（搜索/读取/受限测试）；`run_tests` 默认**不进工具池**（白名单 + `shell:false`），界面显式勾选「允许运行测试」或 `allowRunTests:true` 才启用（2026-10-22）；未开启时不会白调一次再拿 `DISABLED` |
+| **真实模型编辑（code-edit）** | ✅ 可用（小任务） | Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；20 条单文件小任务 **20/20**、L2 **20/20**、611,890 tokens / \$0.0172 / 平均 23.9s。只覆盖小函数级修改，不外推大型重构/多文件改造 |
 | **Research Agent** | ✅ 可用 | `fetch_page` 真实网络（仅 mock 单测验证 SSRF/重定向）；`web_search` 默认 OFFLINE_MOCK |
 | **Misc Agent（杂项）** | ✅ 可用 | 只读清点/定位/小文件解释；结构化结论（`submit_result`）；超范围 → `escalateTo` |
 | **多 Agent 编排** | ✅ 可用 | 主 Agent 拆分 → 并行派发 → 汇总核验；真实 DeepSeek 实测 **4/4 子任务成功**（27s / 13.8k tokens / \$0.0014） |
@@ -83,7 +84,8 @@
 | **首跑自检** | Node 24 / 宿主 Node / sqlite-vec / 数据目录 / 端口 / Docker 镜像 / Key；有 fail 退出 1 | `npm run doctor`；`tests/54`（6 例） |
 | **复盘摘要覆盖** | 每次终态 1 条（DB + JSONL + 事件）；**成功也写**、失败优先；历史 run 不回填 | `tests/56`（5 例）；`npm run digest:list` |
 | **复盘 / 压缩面板** | 前端「复盘」页签：问题优先筛选、摘要详情、过程问题聚合、压缩观测（水位/来源/窗口/触顶）；本机 Edge headless + CDP 实测 | `tests/59`（3 例）；`public/index.html` |
-| **编辑管线评测** | 7/7 命中预期；5 次审批 / 4 文件落盘 / 1 回滚；沙箱 5/7 通过（E3/E4 故意失败）、宿主 2/3；平均 11.5s / P95 12.6s；tokens=0 | `npm run eval:edit`；`reports/EDIT_EVAL.md` |
+| **编辑管线评测** | 7/7 命中预期；5 次审批 / 4 文件落盘 / 1 回滚；沙箱 5/7 通过（E3/E4 故意失败）、宿主 2/3；平均 12.7s / P95 14.1s；tokens=0 | `npm run eval:edit`；`reports/EDIT_EVAL.md`（2026-10-22 重跑） |
+| **真实模型编辑评测** | 20/20（100%）通过；L2 20/20；20 次审批；611,890 tokens / \$0.0172 / 平均 23.9s（DeepSeek Flash） | `npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`；`reports/EDIT_EVAL_REAL.md` |
 | **写能力 UI 链路（真实模型，M1'）** | 界面语义（`orchestration.allowWriteSpecs=true`，不带白名单）→ 派发 code-edit → 沙箱建文件 → **审批卡** → `allow_once` → **落盘 + `hostVerify{ran:true,ok:true}`**（run_mvanz941_6f0f72ff） | `.eval/m1-e2e-out/EVIDENCE.md`「M1'」节；`reports/CHANGELOG.md` 2026-10-16 M1' |
 | 沙箱阶梯（真 Docker） | 容器内 L0 语法 + L1 `tsc --incremental` + 全量测试兜底：**17.1s / 全绿**；容器内套件 269 pass / 1 skip（Docker 用例在容器内无守护进程）/ 0 fail | `.eval/m1-ladder-probe.mjs`、`tests/40` |
 
@@ -130,7 +132,7 @@
 | **R19** | **崩溃恢复边界**（2026-10-20）：只覆盖**落盘窗口**（apply-journal 写入后、change_applied 前），不覆盖模型执行中断后的对话恢复；自动恢复只处理「编辑 + 文件消失 + 有备份」，已落盘编辑/新增必须由用户明确回滚；旧日志/损坏日志只做人工比对；单写者前提（无跨进程文件锁）。`tests/51g` 已用独立进程在 `rm`→`rename` 窗口真实 `SIGKILL`（Windows exit=1） | 不能宣称 exactly-once；多实例/共享仓库需另做锁与租约 | 若做多实例：加 apply 锁 + 租约 + 启动对账；若要覆盖执行中断：持久化完整 RunInput/消息历史 |
 | **R20** | **提示注入只做启发式降风险**（2026-10-20）：42 条固定样本测得恶意检出 20/22、正常误报 2/20；纯 base64 / URL 编码仍漏检，安全文档提到攻击短语会误报（b19/b20）；污点是 run 级，不是逐句 provenance；不可信内容仍会进入模型上下文。已做结构性收紧：**删除 / 宿主命令批次即使人工选 `allow_file` 也不进入粘性集合**（`stickySkipped`），且批准必须带当前批次 `confirmHighRisk`；Runtime 缺确认时不 resolve，HTTP 返回 400。 | 恶意仓库/网页仍可能影响模型判断；二次确认只证明用户做了显式选择，不证明看懂 diff；审批仍可能被社会工程 | 扩真实样本并降低误报；对「外传密钥 / 发布 / 改审批配置」做独立二次确认/能力令牌；长期做来源级 provenance / 只读摘要。`security:redteam --strict` **暂不接 CI 硬门禁** |
 | **R21** | **无测试仓库的「验证真空」**（2026-10-20）：`unavailable` 不阻断落盘，只保证文案诚实；`typecheck` 只证明类型通过，不证明行为正确 | 用户可能把「没报错」误读成「已验证」 | 结果/UI 已标注 mode/coverage；后续可加「必须验证才允许落盘」严格模式；编辑评测集按仓库类型分层统计 |
-| **R22** | **编辑评测仍是管线级**（2026-10-20）：7 个场景由脚本确定性驱动，能证明「拦截/审批/落盘/回滚/TOCTOU」按设计工作，但**不能证明 LLM 能改对 20~30 条真实任务**；也尚未覆盖粘性放行、取消/超时、L1 失败后重生成成功率 | 简历/产品叙事若把它说成“模型改代码成功率”就是夸大 | 下一阶段：同一 fixture 扩到 20~30 条真实模型任务，追加 tokens/成本/重试轮次；管线评测继续做 CI 门禁 |
+| **R22** | **编辑评测的模型层覆盖**（2026-10-20 发现；**2026-10-22 已补真实模型层**）：~~7 个确定性场景不能证明 LLM 能改对真实任务~~ → 新增 `eval:edit:real`，20 条单文件小任务 **20/20**、L2 **20/20**、611,890 tokens / \$0.0172。仍**不覆盖**大型重构、多文件架构调整、粘性放行、取消/超时、L1 失败后重生成成功率 | 可以对内/对外说「小函数级编辑任务在该管线中 20/20」，不能说「模型能重写项目」 | 残余：扩多文件/跨模块 20~30 条，单独统计部分成功、重试轮次与回滚；管线评测继续做 CI 门禁 |
 | **R23** | **上下文压缩的「摘要套摘要」质量衰减**（2026-10-20 发现，**2026-10-21 已修**）：① ~~水位用累计 token，一旦 ≥60% 就每步都压缩，没有迟滞~~ → 现累计水位只作门禁，实际再压要求活动区 ≥2000 字符且自上次压缩后新增 ≥4000 字符或 ≥4 条消息；② ~~旧摘要被当普通消息重压、每条按 200 字符截断~~ → 现滚动摘要保留旧摘要原文，只压新增消息；首次压缩把任务目标原文写入摘要；摘要达 24000 字符上限时停止压缩并标记 `capReached`，绝不截断旧摘要。新增落盘事件 `context_compacted` + `run_digest.compaction` 观测（次数/深度/移除条数/摘要大小）。回归 `tests/33h~33l`、`56f` | 长任务早期目标与关键事实不再逐轮衰减；崩溃型 400 仍由 M18 守卫 | 残余：真实 A/B 已完成（2026-10-21，30 run），结论是 `not_proven`（质量无回退、效率未达 15% 门槛），不能外推成滚动摘要更优；摘要在 24000 字符后停止压缩（防无限增长）；前端 compaction 面板已落地（R24） |
 | **R25** | **压缩水位语义错误**（2026-10-21 发现并修复）：水位原来用 `Budget.tokenBudget` + 累计消耗，把「任务总预算」当「上下文窗口」——预算大的 run 明明 prompt 很小也不压，预算小的 run 反而过早压。现改为 `lastPromptTokens / provider.contextWindow`（DeepSeek 预设 1,048,576，Mock 32,768）；窗口未知才回退累计预算并标 `watermarkSource=unknown`；usage 缺失按字符估算并标 `estimated`。回归 `tests/33m/33n/33o/33p`、`56f` | 压缩时机与真实上下文大小对齐；事件/复盘能解释「为什么压/为什么没压」 | 其余 Provider 的 `contextTokens` 未补齐（不确定就不填）；真实长任务 A/B 已完成（30 run），结论 `not_proven` |
 | **R24** | **历史数据未回补 + 复盘无 UI**（2026-10-20 发现；**前端面板 2026-10-21 已落地**）：① 修复前产生的重复 seq（如 `run_mvgejh0e_3e6c9b74` 225 行/201 seq）不回补，回放观感仍差；② ~~`run_digest` 只有 DB/JSONL/事件与 CLI/API，前端暂无展示面板~~ → 已新增「复盘」页签（筛选 / 列表 / 详情 / 过程问题 / 压缩观测 / 原始 JSON；实时 `context_compacted` 卡片；`run_digest` 自动刷新）；③ 历史 398 个 run 没有摘要（接口 404 并说明，仍不回填） | 复盘可在工作台内完成；老 run 仍只能回查 events | 残余：历史数据不回填；一次性回填脚本可选；重复 seq 只影响观感，不修数据 |
@@ -139,11 +141,11 @@
 
 ## 5. 下一步建议（按性价比排序）
 
-1. **编辑评测从管线扩到真实模型**：已完成 7 个确定性管线场景（`reports/EDIT_EVAL.md`，7/7）；下一阶段用同一 fixture 扩到 20~30 条真实模型修改任务，补充 token/成本/重试轮次，并与管线评测分开汇报。
+1. **编辑评测从管线扩到真实模型（已完成 2026-10-22）**：确定性管线 7/7；真实模型 20 条单文件任务 **20/20（L2 20/20）**，611,890 tokens / \$0.0172，见 `reports/EDIT_EVAL_REAL.md`。下一步扩多文件/跨模块 20~30 条，统计部分成功、重试轮次与回滚，不外推当前 100%。
 2. **提示注入红队集（首版已完成）**：42 条样本 + `npm run security:redteam` 已落地；删除 / 宿主命令已禁用粘性复用，并要求当前批次二次确认。剩余是扩真实样本、降低安全文档误报，并对「外传密钥 / 发布 / 改审批配置」增加独立二次确认/能力令牌。`--strict` 暂不接 CI。
 3. **子任务去重读取**（A/B 指出的结构性浪费）：同一 run 内多个子任务重复读同一批文件（159 次 read_file vs 串行 27 次）→ 加只读文件缓存，或让主 Agent 预读后作为 inputs 下发（见 `reports/PARALLEL_AB.md` §4）。
 4. **编排门槛**：主 Agent 派发前先判"一个上下文能否装下"（预筛 + 估算），装得下就走单 Agent——避免默认编排烧 ~7× token（见 §2 指标）。
-5. **CI 远端跑绿 + 10 分钟上手**：工作流已写入 `.github/workflows/ci.yml`，但还没在 GitHub 实跑；把 `npm run doctor` 写进 README 首跑路径，并用 fresh clone 验一遍。
+5. **CI 远端跑绿 + 10 分钟上手（已完成 2026-10-22）**：GitHub Actions run `39724718243`（`f52ef4a`）全步骤 success；fresh clone（`git clone --depth 1`）在干净目录跑通 `npm install` / typecheck / **416/416** / `demo:codebase`。
 6. **有 Key 时跑 Provider 横评**：按 `reports/PROVIDER_BENCHMARK.md` §3 的命令逐项补齐（约 1 分钟/家，Key 只走环境变量）。
 7. **code-edit 预算实测修正**：`12/12/24/120k` 仍标"待实测修正"（`specs.ts` 注释）；用本页 §2 的端到端数据点回填。
 8. **`subtasks` 表 + 成功率统计**（2 小时）：看每个 spec 的历史成功率与平均耗时，为契约调参提供数据 → 解决 R7。
@@ -182,6 +184,7 @@
 | M24 | **上下文压缩真实 A/B**（2026-10-21）：新增 legacy 对照、`eval:compaction`、预注册判定与报告；5×2×3=30 run，真 DeepSeek Flash，4K 模拟窗口；30/30 完成、质量 100%，rolling tokens 多 1.8%、成本多 1.4%、耗时少 0.1%，结论 `not_proven` | `src/evaluation/compactionAb.ts`、`scripts/compaction-ab.ts`、`tests/58`、`reports/COMPACTION_AB.md`；404 测试全绿（当轮） |
 | M25 | **复盘 / 压缩前端面板**（2026-10-21，R24）：新增「复盘」页签（问题优先筛选、摘要详情、过程问题表、压缩观测、原始 JSON）、当前 run 快捷定位、实时 `context_compacted` 卡片与 `run_digest` 自动刷新 | `public/index.html`、`tests/59`（3 例）；407 测试全绿；Edge headless + CDP 实测 |
 | M26 | **运行测试显式授权 + 演示闭环**（2026-10-22）：`run_tests` 默认不进工具池（`allowRunTests` 按 run 覆盖 + HTTP 布尔校验 + 前端开关 + Mock 剧本自适应）；`extract_evidence` 支持结构化输入（先抽 title/snippet，修掉 JSON 碎片）；CI 在干净 node:24 Linux 容器等价实跑（npm ci 125 包，406 通过 / 1 跳过 / 0 失败）；`docs/DEMO.md` 重写为 10 分钟演示闭环。回归 `tests/60/61` |
+| M27 | **真实模型编辑评测 + 终点 A 收口**（2026-10-22）：新增 10 文件 fixture（基线 15/15）与 20 条真实模型编辑任务；Docker 沙箱 + 自动 allow_once + 宿主 L2 + 源码断言；**20/20 通过、L2 20/20、611,890 tokens / \$0.0172**；修复 `setup` CRLF/LF 静默未命中（BF-011），未命中标 invalid。CI main 绿 + fresh clone 416/416 | `scripts/edit-eval-real.ts`、`eval/edit-fixture/real/`、`reports/EDIT_EVAL_REAL.md`；`npm run eval:edit:real` |
 
 ---
 
@@ -195,6 +198,7 @@ npm test                 # 全量测试（当前 416 子测试 / 416 通过 / 0 
 npm run agents:lint      # 契约门禁：自校验 + 文档漂移 + 工具存在性
 npm run digest:list      # 每次 run 的复盘摘要（默认只看有问题的：非 completed 或过程出过错）
 npm run eval:edit        # 编辑管线评测（7 场景；需 Docker + mta-sandbox:node24，约 80s）→ reports/EDIT_EVAL.md
+npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000  # 真实模型编辑（需 Docker + DEEPSEEK_API_KEY，约 $0.02）→ reports/EDIT_EVAL_REAL.md
 npm run eval:compaction # 上下文压缩 A/B（30 run，需 DEEPSEEK_API_KEY，约 $0.03）→ reports/COMPACTION_AB.md
 npm run security:redteam # 提示注入红队（42 样本；无需 Key）→ reports/INJECTION_REDTEAM.md
 npm run report:refresh   # 重新生成 参数台账 + 子 Agent 契约文档
@@ -242,6 +246,7 @@ curl -s "http://localhost:3000/api/errors?view=summary"   # 高频错误聚合�
 | **`reports/RAG_ABLATION.md`**（生成物） | 想看 chunk 大小/overlap 与 embedding 维度的消融：为什么是 512/64、其他配置差多少；`npm run rag:ablation` |
 | **`reports/COMPACTION_AB.md`**（生成物） | 想看滚动摘要 vs legacy 的真实 A/B：30 run、4K 模拟窗口、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论 `not_proven`，不要外推 |
 | **`reports/EDIT_EVAL.md`**（生成物） | 想看编辑闭环是否按设计工作：真 Docker 拦截/审批/落盘/宿主回滚/TOCTOU；`npm run eval:edit` |
+| **`reports/EDIT_EVAL_REAL.md`**（生成物） | 想看真实模型能否在该管线里改对：20 条单文件任务、L2、tokens/成本/耗时；`npm run eval:edit:real`。样本只覆盖小函数级修改 |
 | **`reports/INJECTION_REDTEAM.md`**（生成物） | 想看提示注入检测的真实检出/误报与已知缺口：42 条样本、漏检 m21/m22、误报 b19/b20；`npm run security:redteam` |
 | **`reports/PROVIDER_BENCHMARK.md`** | 想换 Provider：现状（DeepSeek 已实测）+ 各家逐条复现命令 |
 | `docs/ERROR_REPORTING.md` | **出问题时第一个看**（事故复盘 + 错误码表 + 排查顺序） |

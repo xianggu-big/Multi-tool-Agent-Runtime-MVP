@@ -5,7 +5,9 @@
 
 ## 当前状态（最后更新 2026-10-22；工程实测基线 2026-10-22 = **61 个测试文件 / 416 子测试 / 416 通过 / 0 失败 / 0 跳过 / 约 20s**；Docker 已启动，`40j` 已补跑通过）
 
-> **📦 GitHub 发布准备（2026-10-21）**：仓库已脱敏并**重写为单一干净提交**（`6d3406e`，243 文件）。排除 `.eval/`（本机实测脚本，含个人绝对路径）、`.agents/`（个人工作流配置）、`reports/runs/`、`*.db`；`.env` / `data/` / `.workbuddy/` / `.zcode/` 从未入库。扫描结果：跟踪文件里无 `xianggu`、无 `C:\Users…`、无 `D:\c学习数据结构…`、无真实密钥（仅 `sk-xxx` 占位）。根 `README.md` = GitHub 首页；`.github/workflows/ci.yml` 保留。**remote 已配置**（`origin` → `github.com/xianggu-big/Multi-tool-Agent-Runtime-MVP`），远端 `main` = `a698c71`；本地仍有未提交改动。远端 CI 曾失败（BF-010：契约文档 CRLF/LF 比较），修复已在本地完成、**未推送**。未附 LICENSE（默认保留所有权利，需要再补）。
+> **📦 GitHub 发布准备（2026-10-21）**：仓库已脱敏并**重写为单一干净提交**（`6d3406e`，243 文件）。排除 `.eval/`（本机实测脚本，含个人绝对路径）、`.agents/`（个人工作流配置）、`reports/runs/`、`*.db`；`.env` / `data/` / `.workbuddy/` / `.zcode/` 从未入库。扫描结果：跟踪文件里无 `xianggu`、无 `C:\Users…`、无 `D:\c学习数据结构…`、无真实密钥（仅 `sk-xxx` 占位）。根 `README.md` = GitHub 首页；`.github/workflows/ci.yml` 保留。**remote 已配置**（`origin` → `github.com/xianggu-big/Multi-tool-Agent-Runtime-MVP`），远端 `main` 已推进到 `f52ef4a`；远端 CI 曾失败（BF-010：契约文档 CRLF/LF 比较），修复后 run `39724718243` **全步骤绿**（npm ci / typecheck / agents:lint / npm test）。未附 LICENSE（默认保留所有权利，需要再补）。
+
+> **✅ 终点 A 四条验收已收口（2026-10-22）**：① **GitHub Actions 真绿**：`main` 上 run `39724718243` 全步骤 success；② **干净目录可跑**：`git clone --depth 1` → `npm install` → typecheck → **416/416** → `demo:codebase` completed；③ **真实模型编辑**：20 条单文件任务 **20/20（L2 20/20）**，611,890 tokens / **$0.0172**，证据 `multi-tool-agent/data/edit-eval-real/20261022-131513-248/`；④ **每个数字可复现**：复现命令已写入 `reports/EDIT_EVAL_REAL.md`、`reports/PROJECT_REPORT.md`、`README.md`、`docs/DEMO.md`。边界：20 条只覆盖小函数级修改，不外推大型重构。
 
 > **✅ 运行测试显式授权 + 演示闭环（2026-10-22）**：`run_tests` 默认关闭时**不再进入工具池**（模型看不到，避免 UI 主路径每次都报 `DISABLED@run_tests` 假问题）；新增 `RunInput.allowRunTests`（按 run 覆盖）+ HTTP 布尔校验 + 前端「允许运行测试」开关（默认不勾，misc 隐藏）+ Mock 剧本按工具池自适应。`extract_evidence` 新增 `toReadableText()`：结构化搜索结果先抽 `title/snippet`，修掉 Research demo 的 JSON 碎片。CI 在干净 `node:24` Linux 容器等价实跑：`npm ci` 125 包 → typecheck → agents:lint → test = **406 通过 / 1 跳过（Docker）/ 0 失败**。`docs/DEMO.md` 重写为 10 分钟演示闭环（四条 Mock 命令 / 7 步工作台 / HTTP / 写能力 / 真实模型 / 常见失败）。回归 `tests/60/61`；全量 **61 文件 / 416 子测试（416 通过 / 0 跳过 / 0 失败 / 约 20s）**。
 > **✅ R23 上下文滚动摘要 + 压缩迟滞已修（2026-10-21）**：`compactMessages` 识别旧摘要并**原样保留**，只压旧摘要之后的新增消息；首次压缩把任务目标原文（≤2000 字符）写入摘要；再次压缩要求活动区 ≥2000 字符且自上次压缩后新增 ≥4000 字符或 ≥4 条消息（上下文水位只作门禁，不再一过 60% 就每步压）；摘要达 `COMPACT_SUMMARY_MAX_CHARS=24000` 后停止压缩并标记 `capReached`，绝不截断旧摘要。新增落盘事件 `context_compacted` 与 `run_digest.compaction`。回归 `tests/33h~33l`、`tests/56f`。
@@ -64,10 +66,11 @@
 - RAG / MCP 入口：`multi-tool-agent/docs/RAG_AND_AGENT_STACK.md`（问题→代码→证据）；评测 `multi-tool-agent/scripts/rag-bench.ts` → `reports/RAG_EVAL.md`；MCP demo `multi-tool-agent/scripts/mcp-server.ts`
 - 安全边界 / 验证降级：`multi-tool-agent/docs/SECURITY_BOUNDARIES.md`；`src/security/untrusted.ts`（注入扫描 + 污点）；`src/sandbox/verificationPlan.ts`（full_suite/typecheck/unavailable）；`docs/WRITE_AND_APPROVAL.md` §3.10
 - 红队评测：`multi-tool-agent/eval/security-redteam/corpus.json`（42 条）+ `scripts/injection-redteam.ts` + `reports/INJECTION_REDTEAM.md`；`npm run security:redteam`（`--strict` 暂不接 CI）
-- 首跑自检 / CI：`npm run doctor`（`scripts/doctor.ts`）；`.github/workflows/ci.yml`。GitHub 远端已真跑过一次（run `39549359352` / `a698c71`），**`npm test` 失败**：`tests/23d` 把 CRLF 与 LF 当内容差异（BF-010）。修复后同一 commit + 补丁在 `node:24` 容器跑出 **395 通过 / 1 跳过 / 0 失败**；**修复尚未提交推送，远端 CI 仍是红的**。
-- 编辑评测：`multi-tool-agent/scripts/edit-eval.ts` + `src/evaluation/editEval.ts` + `eval/edit-fixture/base/`；产物 `reports/EDIT_EVAL.md`；`npm run eval:edit`（需 Docker + `mta-sandbox:node24`）
+- 首跑自检 / CI：`npm run doctor`（`scripts/doctor.ts`）；`.github/workflows/ci.yml`。GitHub 远端已真跑过一次（run `39549359352` / `a698c71`），**`npm test` 失败**：`tests/23d` 把 CRLF 与 LF 当内容差异（BF-010）。修复后同一 commit + 补丁在 `node:24` 容器跑出 **395 通过 / 1 跳过 / 0 失败**；已推送（`f52ef4a`）并触发 run `39724718243`：**npm ci / typecheck / agents:lint / npm test 全部 success**。
+- 编辑评测（管线）：`multi-tool-agent/scripts/edit-eval.ts` + `src/evaluation/editEval.ts` + `eval/edit-fixture/base/`；产物 `reports/EDIT_EVAL.md`；`npm run eval:edit`（需 Docker + `mta-sandbox:node24`，7/7）
+- 编辑评测（真实模型）：`multi-tool-agent/scripts/edit-eval-real.ts` + `eval/edit-fixture/real/`；产物 `reports/EDIT_EVAL_REAL.md`；`npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`（需 Docker + `DEEPSEEK_API_KEY`，最新 20/20、L2 20/20、约 $0.017）
 - 产品化路线：`multi-tool-agent/docs/PRODUCT_READINESS.md`（To C 阈值 / 四道门 / 简历叙事 / 下一轮动作）
-- 核心报告集 + 专项评测：`multi-tool-agent/reports/{PROJECT_REPORT,AGENT_REPORT,CHANGELOG,PARAMETERS,CODE_REVIEW_2026-10-13,PARALLEL_AB,PROVIDER_BENCHMARK,ZCODE_COMPARISON,RAG_EVAL,RAG_ABLATION,EDIT_EVAL,INJECTION_REDTEAM}.md`（各自的更新规则见下）
+- 核心报告集 + 专项评测：`multi-tool-agent/reports/{PROJECT_REPORT,AGENT_REPORT,CHANGELOG,PARAMETERS,CODE_REVIEW_2026-10-13,PARALLEL_AB,PROVIDER_BENCHMARK,ZCODE_COMPARISON,RAG_EVAL,RAG_ABLATION,EDIT_EVAL,EDIT_EVAL_REAL,INJECTION_REDTEAM}.md`（各自的更新规则见下）
 - 仓库级 skill（两个，随仓库走）：`.agents/skills/mta-verification/`（验证/复跑/取数）、`.agents/skills/mta-reporting/`（核心报告集 + 专项评测 + 收尾清单）
 - 量化报告：`multi-tool-agent/reports/PARALLEL_AB.md`（并行 A/B，结论为负）、`PROVIDER_BENCHMARK.md`（Provider 现状）；A/B 脚本 `.eval/ab-parallel.mjs` + `.eval/ab-collect.mjs`
 - 单 run 报告（**生成物 + 本地缓存，不入库**）：`npm run report:run -- <runId>|--all` → `multi-tool-agent/reports/runs/`（每 run 一份 + `INDEX.md`）；实现在 `multi-tool-agent/src/report/`、`scripts/gen-run-report.ts`；HTTP `GET /api/runs/:id/report`
@@ -77,12 +80,12 @@
 - 仓库级 skill（随仓库走）：`.agents/skills/`（Codex 从 cwd 向上找 `.agents/skills`）；与 `~/.codex/skills` 同名时会**重复注入**；沙箱内**不可写**（deny ACL），改 skill 要在沙箱外
 
 **下一步（按性价比）**
-- **编辑评测从管线扩到真实模型**：确定性管线 7 场景已完成（`reports/EDIT_EVAL.md`，7/7）；下一阶段用同一 fixture 扩到 20~30 条真实模型任务，补 token/成本/重试轮次，并与管线评测分开汇报（R22）。
+- **编辑评测从单文件扩到多文件（R22 残余）**：确定性管线 7/7、真实模型单文件 20/20 已完成（`reports/EDIT_EVAL{,_REAL}.md`）；下一阶段扩多文件/跨模块 20~30 条，单独统计部分成功、重试轮次与回滚，仍与管线评测分开汇报。
 - **提示注入红队（首版已完成）**：42 条固定样本 + `npm run security:redteam` 已落地；删除/宿主命令已禁用粘性复用并要求当前批次二次确认。剩余：扩真实改写/编码/多语言样本、降低安全文档误报，对「外传密钥 / 发布 / 改审批配置」加独立二次确认/能力令牌，不只依赖 run 级污点。
 - **口径修正（2026-10-19：①②③④ 已完成）**：① ~~`limit_reached` 独立成桶~~、② ~~编排报告 `gaps` 计数 + 前端「缺口 N」徽标~~、④ ~~子任务消耗分层计数（`subtaskUsage`）~~ 均已在 `src/types.ts` / `src/runtime/AgentRuntime.ts` / `public/index.html` 落地（回归用例在 `tests/22_orchestrator.test.ts` 22h/22m）；**③ 已完成**：新增 `ask_user` + `awaiting_user` 终态（回归 `tests/48`）；残余是只识别显式工具调用，正文提问仍可能被记为 completed。
 - **~~流程图 + 量化报告生成器~~（2026-10-16 已完成「渲染层」）**：`npm run report:run -- <runId>|--last <n>|--all` → `reports/runs/<runId>.md`（Mermaid 流程图 + 分层量化 + 六阶段归因）+ `INDEX.md`；HTTP `GET /api/runs/:id/report`（`?format=md`）。实现：`src/report/{runReport,runReportFiles}.ts` + `scripts/gen-run-report.ts`；回归 `tests/41`（8 例，含 41h 验证/回滚归因）+ `tests/22` 22q。`reports/runs/` 是**本地证据缓存**，已加 `.gitignore` 不入库（`--all` 可重生成）。异步沙箱已就绪，下一步可接**终态自动触发**。
 - 编排成本收口：子任务去重读取（同一 run 内只读文件缓存，或主 Agent 预读下发）；派发前先判“单上下文能否装下”，避免默认 7× token。
-- 首次上手收口（部分完成 2026-10-22）：`npm run doctor` 已有；README §1.1~1.3 已补「预期输出 / 最小验证路径 / 常见失败」；`docs/DEMO.md` 已给 10 分钟闭环。剩余：fresh-clone 冒烟（干净机器真跑一遍）与 GitHub 远端 CI 跑绿（本机无 remote）。
+- 首次上手收口（已完成 2026-10-22）：`npm run doctor` 已有；README §1.1~1.3 已补「预期输出 / 最小验证路径 / 常见失败」；`docs/DEMO.md` 已给 10 分钟闭环；干净目录 fresh-clone 跑通 install/typecheck/**416/416**/demo，GitHub Actions run `39724718243` 全绿。
 - 有 Key 时按 `reports/PROVIDER_BENCHMARK.md` §3 命令跑 openai/qwen/moonshot/zhipu 横评。
 
 **报告更新规则（改报告前先对照；核心报告集 + 专项评测全在 `multi-tool-agent/reports/`）**

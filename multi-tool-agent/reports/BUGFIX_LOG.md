@@ -37,6 +37,7 @@
 | **BF-008** | 10-22 | 每次只读代码分析都显示「完成，但过程另有 1 类问题（DISABLED@run_tests）」 | 所有未开启 `CODEBASE_RUN_TESTS_ENABLED` 的 codebase run；UI 主路径默认命中 | `run_tests` 默认关闭，但仍留在工具池里，模型先调用再拿 `DISABLED` | ✅ 代码 + 测试 | `tests/61`；HTTP 对照 `run_mvj11vsd_b69fab7c`（3 步/无问题） vs `run_mvj11wf7_5fcb6e21`（4 步/无问题） |
 | **BF-009** | 10-22 | Research 演示里 `compare_sources.items` 是一堆 JSON 碎片（`{"ok":true,"data":...`） | `demo:research`、以及任何把 `web_search` 原始 JSON 传给 `extract_evidence` 的 run | `extract_evidence` 按句子切分输入；JSON 没有中文句号/换行结构，被切成碎片 | ✅ 代码 + 测试 | `tests/60`（4 例）；修复后演示参数为正常标题与句子 |
 | **BF-010** | 10-22 | GitHub Actions 上 `npm test` 失败（run `39549359352`），本机却全绿 | 远端 CI 一直是红的；对外不能声称 CI 绿 | Windows 工作区 `agents/*.md` 是 CRLF，生成器输出 LF；`tests/23d` 严格比较字符串 | ✅ 代码 + 容器复现 | `tests/23d`；`a698c71` + 补丁在 `node:24` 容器跑出 395 通过 / 1 跳过 / 0 失败 |
+| **BF-011** | 10-22 | 真实模型编辑评测首轮显示 20/20，但 R04/R11/R14 的 `setup` 没真正注入缺陷；R11 又因等价写法被判失败 | 首轮 20 条结论不可信；若直接对外会虚报模型编辑能力 | fixture 是 CRLF，`setup.find` 按 LF 写，`String.replace` 静默未命中；源码断言只认一种写法 | ✅ 已验证 | 首轮证据 `data/edit-eval-real/20261022-130617-398/R11/result.json`；修复后重跑 `data/edit-eval-real/20261022-131513-248/` = 20/20 |
 
 ---
 
@@ -310,7 +311,44 @@ SELECT count(*), count(DISTINCT seq) FROM events WHERE runId='run_mvgejh0e_3e6c9
 | 本机全量测试 | 416 通过 | 416 通过 | `npm test` |
 | 文档漂移门禁 | 依赖平台 | 与平台无关 | `npm run agents:lint` |
 
-**遗留 / 未验证**：修复尚未提交/推送，GitHub 上的 CI 仍是红的；推送后需确认 run 变绿才能写「CI 已绿」。
+**修后确认**：已推送（`f52ef4a`），GitHub Actions run `39724718243` **全步骤绿**（npm ci / typecheck / agents:lint / npm test 均 success）。
+
+---
+## 6.6 BF-011 编辑评测 `setup` 静默未命中 → 假通过
+
+**现象**：第一轮真实模型编辑评测打印 `20/20 通过`，但逐任务证据里 R04/R11/R14 的 `setup` 没有生效——模型看到的是已经正确的基线代码，却被当成「修好了」。同轮 R11 的模型实际写了等价校验 `if (!(size > 0))`，宿主测试 15/15 全绿，却因断言只认 `size <= 0` 被记失败。
+
+**定位**：
+
+```text
+data/edit-eval-real/20261022-130617-398/R11/result.json
+  -> setup.find: "  if (size <= 0) throw ...\n"（LF）
+  -> fixture 原文：CRLF
+  -> after === before，applySetup 未报错
+  -> 模型改后源码：if (!(size > 0)) throw new RangeError(...)
+  -> expect: /size\s*<=\s*0/ 未命中
+```
+
+**影响面**：首轮 20 条全部不能用于对外证明；R04/R11/R14 是明确无效样本，其余样本的 `setup` 是否命中也需要重新核对。若没有看证据目录，报告会把「模型看到正确代码」算成模型能力。
+
+**根因**：两层假设叠加——① `String.replace` 找不到目标时静默返回原文；② 测试 fixture 为 CRLF，而脚本里的 `find` 按 LF 书写。另有一层判定过窄：源码断言把「语义等价写法」当成失败。
+
+**修复**：
+
+- `applySetup` 两侧先 `replace(/\r\n/g, '\n')`，再匹配 / 替换。
+- 未命中不再算通过：任务标 `invalid`，从分母排除，报告单列「有效 / 无效」。
+- R11 断言接受 `size <= 0` 或 `!(size > 0)`，同时要求错误文案含 `size must be > 0`；宿主 4 文件全绿仍是硬门槛。
+
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| 缺陷是否真的注入 | 3 条静默未命中 | 20/20 有效，0 无效 | 证据目录 `result.json` 的 `task.setup` + `invalid` 计数 |
+| 真实模型完成率 | 首轮 20/20（假） | **20/20（100%）** | `npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000` |
+| 宿主 L2 | 20/20 | **20/20** | 每任务 `hostOutput` 15/15 |
+| R11 等价写法 | 判失败 | 判通过 | 重跑证据 `20261022-131513-248/R11/result.json` |
+
+**遗留**：样本仍是单文件小函数级修改；下一步扩多文件/跨模块任务。`setup` 只支持字面量替换，若 fixture 再改行尾或格式化，必须继续用「未命中 = invalid」兜底。
 
 ---
 ## 7. 每次复盘要回答的三个问题

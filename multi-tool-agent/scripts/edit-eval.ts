@@ -504,7 +504,7 @@ async function main(): Promise<void> {
     },
     results,
   );
-  writeFileSync(out, report.replace(/\r?\n/g, '\r\n'), 'utf8');
+  writeFileSync(out, report.replace(/[ \t]+$/gm, '').replace(/\r?\n/g, '\r\n'), 'utf8');
   console.log(`[edit-eval] 报告：${relative(REPO_ROOT, out)}`);
   console.log(`[edit-eval] 证据：${relative(REPO_ROOT, evidenceRoot)}`);
   const failed = results.filter((r) => r.status === 'failed');
