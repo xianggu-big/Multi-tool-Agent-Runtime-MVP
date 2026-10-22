@@ -236,6 +236,27 @@ function runHostTests(repo: string): { ok: boolean; output: string } {
   return { ok: r.status === 0, output };
 }
 
+function runFixtureBaseline(): { ok: boolean; output: string } {
+  const r = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...TEST_FILES.map((f) => join(FIXTURE, f))], {
+    cwd: PROJECT,
+    encoding: 'utf8',
+    timeout: 120_000,
+    shell: false,
+  });
+  const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`.trim();
+  return { ok: r.status === 0, output };
+}
+
+function wilsonLowerBound(passed: number, total: number): number {
+  if (total <= 0) return 0;
+  const z = 1.96;
+  const p = passed / total;
+  const denom = 1 + (z * z) / total;
+  const centre = (p + (z * z) / (2 * total)) / denom;
+  const margin = (z / denom) * Math.sqrt((p * (1 - p)) / total + (z * z) / (4 * total * total));
+  return Math.max(0, centre - margin);
+}
+
 function checkExpect(repo: string, task: Task): Array<{ ok: boolean; detail: string }> {
   const out: Array<{ ok: boolean; detail: string }> = [];
   for (const e of task.expect) {
@@ -279,6 +300,12 @@ async function main(): Promise<void> {
   const budgetUsd = numArg('budget-usd', 1, 0.01, 50);
   const timeoutMs = intArg('timeout-ms', 240_000, 10_000, 900_000);
   const model = arg('model') ?? 'deepseek-flash';
+  const preflightOnly = process.argv.includes('--preflight-only');
+
+  const baseline = runFixtureBaseline();
+  if (!baseline.ok) throw new Error(`fixture 基线不绿，拒绝开始评测：\n${baseline.output.slice(-2000)}`);
+  console.log('[eval:edit:real] fixture 基线：15/15 通过');
+  if (preflightOnly) return;
 
   const tasks = TASKS.slice(0, limit);
   const runStamp = stamp();
@@ -427,6 +454,12 @@ async function main(): Promise<void> {
   const totalTokens = results.reduce((a, r) => a + r.tokens, 0);
   const totalCost = results.reduce((a, r) => a + r.costUsd, 0);
   const hostPass = valid.filter((r) => r.hostOk).length;
+  const passRate = passed / Math.max(1, valid.length);
+  const lower = wilsonLowerBound(passed, valid.length);
+  const avgSteps = results.reduce((a, r) => a + r.steps, 0) / Math.max(1, results.length);
+  const avgModelCalls = results.reduce((a, r) => a + r.modelCalls, 0) / Math.max(1, results.length);
+  const avgToolCalls = results.reduce((a, r) => a + r.toolCalls, 0) / Math.max(1, results.length);
+  const p95Ms = [...results.map((r) => r.wallMs)].sort((a, b) => a - b)[Math.max(0, Math.ceil(results.length * 0.95) - 1)] ?? 0;
 
   const lines: string[] = [];
   lines.push('# 真实模型编辑评测（EDIT_EVAL_REAL）', '');
@@ -437,12 +470,16 @@ async function main(): Promise<void> {
   lines.push('| 指标 | 值 |');
   lines.push('|---|---|');
   lines.push(`| 任务数 | ${results.length}（有效 ${valid.length} / 无效 ${invalid}） |`);
-  lines.push(`| 通过（宿主全绿 + 断言全中） | **${passed}/${valid.length}（${((passed / Math.max(1, valid.length)) * 100).toFixed(1)}%）** |`);
+  lines.push(`| 通过（宿主全绿 + 断言全中） | **${passed}/${valid.length}（${(passRate * 100).toFixed(1)}%）** |`);
+  lines.push(`| 95% Wilson 下界（单轮） | **${(lower * 100).toFixed(1)}%**（不是稳定能力承诺） |`);
   lines.push(`| 宿主测试通过率（L2） | **${hostPass}/${valid.length}（${((hostPass / Math.max(1, valid.length)) * 100).toFixed(1)}%）** |`);
   lines.push(`| 审批次数 | ${results.reduce((a, r) => a + r.approvals, 0)} |`);
   lines.push(`| tokens | ${totalTokens} |`);
   lines.push(`| 成本 | $${totalCost.toFixed(4)} |`);
   lines.push(`| 平均耗时 | ${(results.reduce((a, r) => a + r.wallMs, 0) / results.length / 1000).toFixed(1)}s |`);
+  lines.push(`| P95 耗时 | ${(p95Ms / 1000).toFixed(1)}s |`);
+  lines.push(`| 平均步骤 / 模型调用 / 工具调用 | ${avgSteps.toFixed(1)} / ${avgModelCalls.toFixed(1)} / ${avgToolCalls.toFixed(1)} |`);
+  lines.push(`| 每题平均 tokens / 成本 | ${Math.round(totalTokens / Math.max(1, results.length))} / $${(totalCost / Math.max(1, results.length)).toFixed(4)} |`);
   lines.push('', '## 逐条结果', '');
   lines.push('| ID | 任务 | 结果 | 落盘 | 审批 | L2 | 断言 | tokens | 失败原因 |');
   lines.push('|---|---|---|---|---|---|---|---|---|');
@@ -456,11 +493,23 @@ async function main(): Promise<void> {
   lines.push('- 判定要求同时满足：宿主 4 个测试文件全绿 + `expect` 断言命中。只看「模型说改好了」不算通过。');
   lines.push('- `setup` 未命中的任务标记为 `invalid` 并从分母排除；R11 接受 `size <= 0` 或等价的 `!(size > 0)`，同时要求错误文案含 `size must be > 0`。');
   lines.push('- 成本按 Provider 返回值累计；预算用尽后剩余任务记失败并标原因，不重试。');
-  lines.push('- 样本量 20 条，只覆盖小函数级修改；不代表大型重构或多文件架构调整能力。');
+  lines.push(`- 单轮 ${results.length} 条，95% Wilson 下界 **${(lower * 100).toFixed(1)}%**；不能把 100% 点估计当成稳定能力，需重复跑与扩样本。`);
+  lines.push('- 只覆盖小函数级修改；不代表大型重构、多文件架构调整或模糊需求。');
 
   const reportPath = join(PROJECT, 'reports', 'EDIT_EVAL_REAL.md');
   writeFileSync(reportPath, lines.join('\n'), 'utf8');
   writeFileSync(join(evidenceDir, 'summary.json'), JSON.stringify({ runStamp, model, results, totals: { passed, totalTokens, totalCost } }, null, 2), 'utf8');
+  const manifest = {
+    schemaVersion: 1,
+    runStamp,
+    model,
+    fixture: 'eval/edit-fixture/real/',
+    generatedAt: new Date().toISOString(),
+    totals: { tasks: results.length, valid: valid.length, invalid, passed, hostPass, totalTokens, totalCost, passRate, wilson95Lower: lower },
+    policy: { approval: 'auto allow_once', scoring: 'host L2 green AND expect checks pass', setupMiss: 'invalid/excluded' },
+    results,
+  };
+  writeFileSync(join(PROJECT, 'reports', 'EDIT_EVAL_REAL_EVIDENCE.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 
   console.log(`[eval:edit:real] ${passed}/${results.length} 通过 · L2 ${hostPass}/${results.length} · ${totalTokens} tokens · $${totalCost.toFixed(4)}`);
   console.log(`[eval:edit:real] 报告: ${reportPath}`);

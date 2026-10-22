@@ -68,7 +68,7 @@
 - 红队评测：`multi-tool-agent/eval/security-redteam/corpus.json`（42 条）+ `scripts/injection-redteam.ts` + `reports/INJECTION_REDTEAM.md`；`npm run security:redteam`（`--strict` 暂不接 CI）
 - 首跑自检 / CI：`npm run doctor`（`scripts/doctor.ts`）；`.github/workflows/ci.yml`。GitHub 远端已真跑过一次（run `39549359352` / `a698c71`），**`npm test` 失败**：`tests/23d` 把 CRLF 与 LF 当内容差异（BF-010）。修复后同一 commit + 补丁在 `node:24` 容器跑出 **395 通过 / 1 跳过 / 0 失败**；已推送（`f52ef4a`）并触发 run `39724718243`：**npm ci / typecheck / agents:lint / npm test 全部 success**。
 - 编辑评测（管线）：`multi-tool-agent/scripts/edit-eval.ts` + `src/evaluation/editEval.ts` + `eval/edit-fixture/base/`；产物 `reports/EDIT_EVAL.md`；`npm run eval:edit`（需 Docker + `mta-sandbox:node24`，7/7）
-- 编辑评测（真实模型）：`multi-tool-agent/scripts/edit-eval-real.ts` + `eval/edit-fixture/real/`；产物 `reports/EDIT_EVAL_REAL.md`；`npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`（需 Docker + `DEEPSEEK_API_KEY`，最新 20/20、L2 20/20、约 $0.017）
+- 编辑评测（真实模型）：`multi-tool-agent/scripts/edit-eval-real.ts` + `eval/edit-fixture/real/`；产物 `reports/EDIT_EVAL_REAL.md` + 脱敏证据 `EDIT_EVAL_REAL_EVIDENCE.json`；`npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`（需 Docker + `DEEPSEEK_API_KEY`，最新 20/20、L2 20/20、单轮 Wilson 下界 83.9%、约 $0.017）；`--preflight-only` 先验证 fixture 基线 15/15
 - 产品化路线：`multi-tool-agent/docs/PRODUCT_READINESS.md`（To C 阈值 / 四道门 / 简历叙事 / 下一轮动作）
 - 核心报告集 + 专项评测：`multi-tool-agent/reports/{PROJECT_REPORT,AGENT_REPORT,CHANGELOG,PARAMETERS,CODE_REVIEW_2026-10-13,PARALLEL_AB,PROVIDER_BENCHMARK,ZCODE_COMPARISON,RAG_EVAL,RAG_ABLATION,EDIT_EVAL,EDIT_EVAL_REAL,INJECTION_REDTEAM}.md`（各自的更新规则见下）
 - 仓库级 skill（两个，随仓库走）：`.agents/skills/mta-verification/`（验证/复跑/取数）、`.agents/skills/mta-reporting/`（核心报告集 + 专项评测 + 收尾清单）

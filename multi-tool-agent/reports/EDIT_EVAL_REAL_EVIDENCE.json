@@ -1,0 +1,425 @@
+{
+  "schemaVersion": 1,
+  "runStamp": "20261022-131513-248",
+  "model": "deepseek-flash",
+  "fixture": "eval/edit-fixture/real/",
+  "generatedAt": "2026-10-22T05:54:26.3247395Z",
+  "totals": {
+    "tasks": 20,
+    "valid": 20,
+    "invalid": 0,
+    "passed": 20,
+    "hostPass": 20,
+    "totalTokens": 611890.0,
+    "totalCost": 0.017204756800000005,
+    "passRate": 1,
+    "wilson95Lower": 0.8388698745050667
+  },
+  "policy": {
+    "approval": "auto allow_once",
+    "scoring": "host L2 green AND expect checks pass",
+    "setupMiss": "invalid/excluded"
+  },
+  "results": [
+    {
+      "id": "R01",
+      "title": "修复 add 的减法错误",
+      "status": "passed",
+      "applied": [
+        "src/calc.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 10,
+      "modelCalls": 10,
+      "toolCalls": 12,
+      "tokens": 57618,
+      "costUsd": 0.0012836432000000002,
+      "wallMs": 37049,
+      "notes": [
+        "report: src/calc.ts 中 add(a, b) 已由 `a - b` 修正为 `a + b`，改动经审批落盘（ap_1686c682，allow_once），宿主全量测试通过（exitCode 0，15/15 通过）。"
+      ]
+    },
+    {
+      "id": "R02",
+      "title": "修复 sub 的加法错误",
+      "status": "passed",
+      "applied": [
+        "src/calc.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 4,
+      "modelCalls": 4,
+      "toolCalls": 4,
+      "tokens": 11924,
+      "costUsd": 0.00032527040000000004,
+      "wallMs": 17586,
+      "notes": [
+        "report: src/calc.ts 的 sub(a, b) 已由 a + b 改为 a - b，仅改实现；改动经审批落盘，宿主全量测试通过（exit 0）。"
+      ]
+    },
+    {
+      "id": "R03",
+      "title": "修复 mul 的实现",
+      "status": "passed",
+      "applied": [
+        "src/calc.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 5,
+      "modelCalls": 5,
+      "toolCalls": 7,
+      "tokens": 17795,
+      "costUsd": 0.0005160680000000001,
+      "wallMs": 19243,
+      "notes": [
+        "report: 已修复 src/calc.ts 的 mul 实现（a + b → a * b），改动经审批落盘，宿主全量测试通过（4 个测试文件，exit 0）。"
+      ]
+    },
+    {
+      "id": "R04",
+      "title": "补回除零检查",
+      "status": "passed",
+      "applied": [
+        "src/calc.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 12,
+      "modelCalls": 12,
+      "toolCalls": 14,
+      "tokens": 81242,
+      "costUsd": 0.0019571608,
+      "wallMs": 32735,
+      "notes": [
+        "report: 已在 src/calc.ts 的 div() 补回除零检查，b=0 时抛 'divide by zero'；改动经审批落盘，宿主全量测试通过（exitCode=0）。"
+      ]
+    },
+    {
+      "id": "R05",
+      "title": "修复 clamp 忽略上限",
+      "status": "passed",
+      "applied": [
+        "src/calc.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 6,
+      "modelCalls": 6,
+      "toolCalls": 8,
+      "tokens": 24531,
+      "costUsd": 0.0009319352000000001,
+      "wallMs": 23046,
+      "notes": [
+        "report: 已修复 src/calc.ts 的 clamp，使其同时夹在 [min, max]；改动经审批落盘，宿主全量测试通过（15/15）。"
+      ]
+    },
+    {
+      "id": "R06",
+      "title": "修复 capitalize 未大写",
+      "status": "passed",
+      "applied": [
+        "src/strings.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 4,
+      "modelCalls": 4,
+      "toolCalls": 5,
+      "tokens": 12823,
+      "costUsd": 0.0003685808,
+      "wallMs": 17023,
+      "notes": [
+        "report: capitalize 首字母大写的修复已审批落盘，宿主全量测试通过（exitCode 0）。"
+      ]
+    },
+    {
+      "id": "R07",
+      "title": "修复 truncate 短串被截断",
+      "status": "passed",
+      "applied": [
+        "src/strings.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 5,
+      "modelCalls": 5,
+      "toolCalls": 6,
+      "tokens": 17446,
+      "costUsd": 0.0004996712000000001,
+      "wallMs": 18466,
+      "notes": [
+        "report: truncate 已修复并有条件早返回：s.length <= max 原样返回，否则 s.slice(0, max) + '…'；改动经审批落盘，宿主全量测试通过。"
+      ]
+    },
+    {
+      "id": "R08",
+      "title": "修复 slugify 未替换空格",
+      "status": "passed",
+      "applied": [
+        "src/strings.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 5,
+      "modelCalls": 5,
+      "toolCalls": 7,
+      "tokens": 17207,
+      "costUsd": 0.0004778928,
+      "wallMs": 18255,
+      "notes": [
+        "report: 已修复 src/strings.ts 的 slugify（空白替换为连字符），改动经审批落盘，宿主全量测试通过。"
+      ]
+    },
+    {
+      "id": "R09",
+      "title": "修复 sum 空数组崩溃",
+      "status": "passed",
+      "applied": [
+        "src/arrays.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 7,
+      "modelCalls": 7,
+      "toolCalls": 9,
+      "tokens": 27938,
+      "costUsd": 0.0007675976000000001,
+      "wallMs": 21343,
+      "notes": [
+        "report: src/arrays.ts 的 sum 已通过给 reduce 增加初始值 0 修复，空数组返回 0；改动经审批落盘，宿主全量测试 15/15 通过。"
+      ]
+    },
+    {
+      "id": "R10",
+      "title": "修复 unique 未去重",
+      "status": "passed",
+      "applied": [
+        "src/arrays.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 7,
+      "modelCalls": 7,
+      "toolCalls": 9,
+      "tokens": 28544,
+      "costUsd": 0.0009040808000000001,
+      "wallMs": 24320,
+      "notes": [
+        "report: src/arrays.ts 的 unique 已修复为保持首次出现顺序的去重（Set 记录已见元素），改动经审批落盘，宿主全量测试复验通过（15/15）。"
+      ]
+    },
+    {
+      "id": "R11",
+      "title": "补回 chunk 的 size 校验",
+      "status": "passed",
+      "applied": [
+        "src/arrays.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 9,
+      "modelCalls": 9,
+      "toolCalls": 11,
+      "tokens": 43468,
+      "costUsd": 0.0012147744,
+      "wallMs": 23731,
+      "notes": [
+        "report: 已在 src/arrays.ts 的 chunk 中补回 size<=0 校验并成功落盘，宿主全量测试通过。"
+      ]
+    },
+    {
+      "id": "R12",
+      "title": "修复 name 校验条件反向",
+      "status": "passed",
+      "applied": [
+        "src/validate.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 5,
+      "modelCalls": 5,
+      "toolCalls": 6,
+      "tokens": 16961,
+      "costUsd": 0.00044757440000000004,
+      "wallMs": 16960,
+      "notes": [
+        "report: 已修复 validateUser 中 name 校验条件反向的 bug，改动经审批落盘，宿主全量测试通过。"
+      ]
+    },
+    {
+      "id": "R13",
+      "title": "修复 age 上限",
+      "status": "passed",
+      "applied": [
+        "src/validate.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 4,
+      "modelCalls": 4,
+      "toolCalls": 6,
+      "tokens": 13513,
+      "costUsd": 0.00040501440000000006,
+      "wallMs": 17467,
+      "notes": [
+        "report: 已将 src/validate.ts 的 age 上限从 200 改为 150，改动经审批落盘且宿主全量测试通过（exit 0）。"
+      ]
+    },
+    {
+      "id": "R14",
+      "title": "恢复 email 校验",
+      "status": "passed",
+      "applied": [
+        "src/validate.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 8,
+      "modelCalls": 8,
+      "toolCalls": 10,
+      "tokens": 32133,
+      "costUsd": 0.0008306648000000001,
+      "wallMs": 24011,
+      "notes": [
+        "report: 已恢复 src/validate.ts 的 email 校验（要求 local@domain.tld），改动经审批落盘，宿主全量测试通过（4 个测试文件，exitCode 0）。"
+      ]
+    },
+    {
+      "id": "R15",
+      "title": "新增 average 函数",
+      "status": "passed",
+      "applied": [
+        "src/calc.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 7,
+      "modelCalls": 7,
+      "toolCalls": 8,
+      "tokens": 26362,
+      "costUsd": 0.0006514088000000001,
+      "wallMs": 20909,
+      "notes": [
+        "report: 已在 src/calc.ts 新增并导出 average(nums: number[]): number（空数组返回 0），改动通过沙箱检查与人工审批后落盘，宿主全量测试通过（exitCode 0）。"
+      ]
+    },
+    {
+      "id": "R16",
+      "title": "新增 has 函数",
+      "status": "passed",
+      "applied": [
+        "src/arrays.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 6,
+      "modelCalls": 6,
+      "toolCalls": 9,
+      "tokens": 23156,
+      "costUsd": 0.0007249704,
+      "wallMs": 33504,
+      "notes": [
+        "report: 已在 src/arrays.ts 新增并导出 has<T>(items: T[], value: T): boolean（用 includes），已有函数未改动；改动经审批落盘，宿主全量测试通过（exit 0）。"
+      ]
+    },
+    {
+      "id": "R17",
+      "title": "新增 reverse 函数",
+      "status": "passed",
+      "applied": [
+        "src/strings.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 8,
+      "modelCalls": 8,
+      "toolCalls": 10,
+      "tokens": 34902,
+      "costUsd": 0.0010303608000000002,
+      "wallMs": 25301,
+      "notes": [
+        "report: src/strings.ts 已新增并导出 reverse(s: string): string（Array.from(s).reverse().join('')），已有函数未改动；改动落盘且宿主全量测试通过（15/15）"
+      ]
+    },
+    {
+      "id": "R18",
+      "title": "新增并导出 isEmail",
+      "status": "passed",
+      "applied": [
+        "src/validate.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 10,
+      "modelCalls": 10,
+      "toolCalls": 13,
+      "tokens": 58962,
+      "costUsd": 0.0018246424000000006,
+      "wallMs": 31569,
+      "notes": [
+        "report: 已在 src/validate.ts 新增并导出 isEmail(s: string): boolean，validateUser 改为复用同一邮箱规则（行为不变），改动已审批落盘且宿主全量测试通过；未触碰 tests/。"
+      ]
+    },
+    {
+      "id": "R19",
+      "title": "提取邮箱正则常量",
+      "status": "passed",
+      "applied": [
+        "src/validate.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 8,
+      "modelCalls": 8,
+      "toolCalls": 11,
+      "tokens": 36107,
+      "costUsd": 0.0010506664000000001,
+      "wallMs": 25536,
+      "notes": [
+        "report: 已在 src/validate.ts 提取并导出模块级常量 EMAIL_RE 供 validateUser 使用，改动经审批落盘、宿主全量测试通过（exit 0）；但需注意：该邮箱正则原文件中仅出现 1 次，并非\"重复\"，故本次实际是\"提取为常量\"而非\"去重\"。"
+      ]
+    },
+    {
+      "id": "R20",
+      "title": "收紧 sum 参数类型",
+      "status": "passed",
+      "applied": [
+        "src/arrays.ts"
+      ],
+      "approvals": 1,
+      "hostOk": true,
+      "expectOk": true,
+      "steps": 7,
+      "modelCalls": 7,
+      "toolCalls": 9,
+      "tokens": 29258,
+      "costUsd": 0.0009927792000000001,
+      "wallMs": 30618,
+      "notes": [
+        "report: src/arrays.ts 中 sum 的参数类型已由 number[] 改为 readonly number[]（仅 1 行签名改动），经一次人工审批（allow_once）落盘，宿主全量测试复验通过；未改动 tests/ 任何断言。"
+      ]
+    }
+  ]
+}

@@ -19,7 +19,7 @@
 |---|---|---|
 | **共享 Agent Loop** | ✅ 可用 | 一套循环驱动 4 个 Agent（codebase / research / misc / orchestrator），预算·权限·超时·检查点统一强制 |
 | **Codebase Agent** | ✅ 可用 | 真实本地 I/O（搜索/读取/受限测试）；`run_tests` 默认**不进工具池**（白名单 + `shell:false`），界面显式勾选「允许运行测试」或 `allowRunTests:true` 才启用（2026-10-22）；未开启时不会白调一次再拿 `DISABLED` |
-| **真实模型编辑（code-edit）** | ✅ 可用（小任务） | Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；20 条单文件小任务 **20/20**、L2 **20/20**、611,890 tokens / \$0.0172 / 平均 23.9s。只覆盖小函数级修改，不外推大型重构/多文件改造 |
+| **真实模型编辑（code-edit）** | ✅ 可用（小任务） | Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；20 条单文件小任务 **20/20**、L2 **20/20**、611,890 tokens / \$0.0172 / 平均 23.9s，单轮 95% Wilson 下界 **83.9%**。只覆盖小函数级修改，不外推大型重构/多文件改造 |
 | **Research Agent** | ✅ 可用 | `fetch_page` 真实网络（仅 mock 单测验证 SSRF/重定向）；`web_search` 默认 OFFLINE_MOCK |
 | **Misc Agent（杂项）** | ✅ 可用 | 只读清点/定位/小文件解释；结构化结论（`submit_result`）；超范围 → `escalateTo` |
 | **多 Agent 编排** | ✅ 可用 | 主 Agent 拆分 → 并行派发 → 汇总核验；真实 DeepSeek 实测 **4/4 子任务成功**（27s / 13.8k tokens / \$0.0014） |
@@ -85,7 +85,7 @@
 | **复盘摘要覆盖** | 每次终态 1 条（DB + JSONL + 事件）；**成功也写**、失败优先；历史 run 不回填 | `tests/56`（5 例）；`npm run digest:list` |
 | **复盘 / 压缩面板** | 前端「复盘」页签：问题优先筛选、摘要详情、过程问题聚合、压缩观测（水位/来源/窗口/触顶）；本机 Edge headless + CDP 实测 | `tests/59`（3 例）；`public/index.html` |
 | **编辑管线评测** | 7/7 命中预期；5 次审批 / 4 文件落盘 / 1 回滚；沙箱 5/7 通过（E3/E4 故意失败）、宿主 2/3；平均 12.7s / P95 14.1s；tokens=0 | `npm run eval:edit`；`reports/EDIT_EVAL.md`（2026-10-22 重跑） |
-| **真实模型编辑评测** | 20/20（100%）通过；L2 20/20；20 次审批；611,890 tokens / \$0.0172 / 平均 23.9s（DeepSeek Flash） | `npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`；`reports/EDIT_EVAL_REAL.md` |
+| **真实模型编辑评测** | 20/20 通过；L2 20/20；20 次审批；611,890 tokens / \$0.0172 / 平均 23.9s；单轮 95% Wilson 下界 **83.9%**（DeepSeek Flash） | `npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`；`reports/EDIT_EVAL_REAL.md` + `EDIT_EVAL_REAL_EVIDENCE.json` |
 | **写能力 UI 链路（真实模型，M1'）** | 界面语义（`orchestration.allowWriteSpecs=true`，不带白名单）→ 派发 code-edit → 沙箱建文件 → **审批卡** → `allow_once` → **落盘 + `hostVerify{ran:true,ok:true}`**（run_mvanz941_6f0f72ff） | `.eval/m1-e2e-out/EVIDENCE.md`「M1'」节；`reports/CHANGELOG.md` 2026-10-16 M1' |
 | 沙箱阶梯（真 Docker） | 容器内 L0 语法 + L1 `tsc --incremental` + 全量测试兜底：**17.1s / 全绿**；容器内套件 269 pass / 1 skip（Docker 用例在容器内无守护进程）/ 0 fail | `.eval/m1-ladder-probe.mjs`、`tests/40` |
 

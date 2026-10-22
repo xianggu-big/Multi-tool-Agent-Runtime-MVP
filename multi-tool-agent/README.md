@@ -269,7 +269,7 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/RAG_ABLATION.md` —— **RAG 消融**（生成物）：chunk 大小/overlap 与 embedding 维度对 Recall/MRR/nDCG/存储的影响；`npm run rag:ablation`。
 - `reports/COMPACTION_AB.md` —— **上下文压缩 A/B**（生成物）：rolling vs legacy 的 30 run 真实模型对照、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论是 `not_proven`，不要外推成“滚动摘要更优”。
 - `reports/EDIT_EVAL.md` —— **编辑管线评测**（生成物）：真 Docker + 真审批 + 真落盘 + 宿主复验/回滚，7 个确定性场景；`npm run eval:edit`。**注意：衡量管线，不是模型编辑智力**。
-- `reports/EDIT_EVAL_REAL.md` —— **真实模型编辑评测**（生成物）：20 条单文件小任务，Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；当前 **20/20（L2 20/20）**、611,890 tokens / $0.0172；`npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`。**只覆盖小函数级修改，不外推大型重构**。
+- `reports/EDIT_EVAL_REAL.md` —— **真实模型编辑评测**（生成物）：20 条单文件小任务，Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；当前 **20/20（L2 20/20）**、611,890 tokens / $0.0172，单轮 95% Wilson 下界 **83.9%**；逐任务脱敏证据在 `reports/EDIT_EVAL_REAL_EVIDENCE.json`。`npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`。**只覆盖小函数级修改，不外推大型重构**。
 - `reports/INJECTION_REDTEAM.md` —— **提示注入红队评测**（生成物）：42 条恶意/正常/已知缺口样本；当前恶意检出 20/22、正常误报 2/20；`npm run security:redteam`。**是启发式降风险，不是防住注入**。
 - `reports/PROVIDER_BENCHMARK.md` —— **Provider 横评**（人写）：DeepSeek 已实测，其余家有 Key 再补测回填。
 - `reports/ZCODE_COMPARISON.md` —— **对标分析与优化路线**（人写）：沿用「机制 / 对比 / 建议 / 顺序」四段式。
