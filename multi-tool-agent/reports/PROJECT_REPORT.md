@@ -145,7 +145,7 @@
 2. **提示注入红队集（首版已完成）**：42 条样本 + `npm run security:redteam` 已落地；删除 / 宿主命令已禁用粘性复用，并要求当前批次二次确认。剩余是扩真实样本、降低安全文档误报，并对「外传密钥 / 发布 / 改审批配置」增加独立二次确认/能力令牌。`--strict` 暂不接 CI。
 3. **子任务去重读取**（A/B 指出的结构性浪费）：同一 run 内多个子任务重复读同一批文件（159 次 read_file vs 串行 27 次）→ 加只读文件缓存，或让主 Agent 预读后作为 inputs 下发（见 `reports/PARALLEL_AB.md` §4）。
 4. **编排门槛**：主 Agent 派发前先判"一个上下文能否装下"（预筛 + 估算），装得下就走单 Agent——避免默认编排烧 ~7× token（见 §2 指标）。
-5. **CI 远端跑绿 + 10 分钟上手（已完成 2026-10-22）**：GitHub Actions run `39724718243`（`f52ef4a`）全步骤 success；fresh clone（`git clone --depth 1`）在干净目录跑通 `npm install` / typecheck / **416/416** / `demo:codebase`。
+5. **CI 远端跑绿 + 10 分钟上手（已完成 2026-10-22）**：GitHub Actions run `39728277735`（`c12a394`）全步骤 success；最新提交 fresh clone（`git clone --depth 1`）在干净目录跑通 `npm install` / typecheck / **416/416** / `demo:codebase`。
 6. **有 Key 时跑 Provider 横评**：按 `reports/PROVIDER_BENCHMARK.md` §3 的命令逐项补齐（约 1 分钟/家，Key 只走环境变量）。
 7. **code-edit 预算实测修正**：`12/12/24/120k` 仍标"待实测修正"（`specs.ts` 注释）；用本页 §2 的端到端数据点回填。
 8. **`subtasks` 表 + 成功率统计**（2 小时）：看每个 spec 的历史成功率与平均耗时，为契约调参提供数据 → 解决 R7。
