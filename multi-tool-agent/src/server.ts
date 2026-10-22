@@ -55,6 +55,10 @@ export function validateRunRequest(body: Record<string, unknown>, config: Runtim
   if (body.goal.length > 20_000) {
     return { error: `goal 过长（${body.goal.length} 字符，最多 20000）` };
   }
+  // 运行测试是「在目标仓库执行代码」的能力：必须是显式布尔，避免字符串 "false" 被误当真
+  if (body.allowRunTests !== undefined && typeof body.allowRunTests !== 'boolean') {
+    return { error: 'allowRunTests 必须是布尔值' };
+  }
   const limits = parseRunLimits(body);
   if (limits.error) return { error: limits.error };
 
@@ -164,6 +168,7 @@ export function validateRunRequest(body: Record<string, unknown>, config: Runtim
     tokenBudget: limits.values.tokenBudget,
     costBudgetUsd: limits.values.costBudgetUsd,
     mockScenario: typeof body.mockScenario === 'string' ? body.mockScenario : undefined,
+    allowRunTests: typeof body.allowRunTests === 'boolean' ? body.allowRunTests : undefined,
     llm,
     search,
     stream,

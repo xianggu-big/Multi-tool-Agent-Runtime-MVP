@@ -216,10 +216,23 @@ export interface CompactResult {
   summaryCapReached: boolean;
 }
 
+export type CompactStrategy = 'rolling' | 'legacy';
+
 export interface CompactOptions {
   /** 任务目标：首次压缩时原文保留，避免长任务忘记最初目标 */
   goal?: string;
+  /**
+   * 摘要策略：
+   * - rolling（默认，生产）：旧摘要原文保留，只压新增消息；
+   * - legacy（仅 A/B 对照）：复刻 R23 之前的固定切法 + 每条 200 字 + 3000 字上限，
+   *   不保留旧摘要、不保留任务目标。仍复用 alignCompactCut，避免孤儿 tool。
+   */
+  strategy?: CompactStrategy;
 }
+
+/** legacy 对照策略的摘要上限（复刻 R23 之前的实现，仅用于评测） */
+export const LEGACY_SUMMARY_MAX_CHARS = 3_000;
+export const LEGACY_SUMMARY_PER_MESSAGE_CHARS = 200;
 
 /**
  * 上下文压缩（滚动微压缩）：把 system 之后、最近 COMPACT_KEEP_TAIL 条之前的消息压成摘要。
@@ -233,6 +246,7 @@ export interface CompactOptions {
  * 纯函数（原地修改 messages 数组）。切点仍经 alignCompactCut 对齐，保证不产生孤儿 tool 消息。
  */
 export function compactMessages(messages: ChatMessage[], opts: CompactOptions = {}): CompactResult {
+  if (opts.strategy === 'legacy') return compactMessagesLegacy(messages);
   const noop: CompactResult = {
     removedCount: 0,
     compactDepth: 0,
@@ -297,6 +311,46 @@ export function compactMessages(messages: ChatMessage[], opts: CompactOptions = 
     compactDepth: depth,
     summaryChars: compactMsg.content.length,
     keptSummary: !!oldSummary,
+    summaryCapReached: false,
+  };
+}
+
+/**
+ * legacy 对照实现（仅供 A/B 评测，生产不要用）：
+ * 复刻 R23 之前的「固定 6 条切一刀 + 每条 200 字 + 总长 3000 字」。
+ * 与旧实现唯一的差别是仍调用 alignCompactCut —— 否则会重新引入线上 400 的孤儿 tool。
+ */
+function compactMessagesLegacy(messages: ChatMessage[]): CompactResult {
+  const noop: CompactResult = {
+    removedCount: 0,
+    compactDepth: 0,
+    summaryChars: 0,
+    keptSummary: false,
+    summaryCapReached: false,
+  };
+  if (messages.length <= COMPACT_KEEP_TAIL + 2) return noop;
+  const keepFrom = alignCompactCut(messages, messages.length - COMPACT_KEEP_TAIL);
+  if (keepFrom <= 1 || keepFrom >= messages.length) return noop;
+  const removed = messages.slice(1, keepFrom);
+  if (!removed.length) return noop;
+  const digest = removed
+    .map((m) =>
+      `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`
+        .replace(/\s+/g, ' ')
+        .slice(0, LEGACY_SUMMARY_PER_MESSAGE_CHARS),
+    )
+    .join('\n')
+    .slice(0, LEGACY_SUMMARY_MAX_CHARS);
+  const compactMsg: ChatMessage = {
+    role: 'user',
+    content: `【上下文压缩：以下是较早 ${removed.length} 条消息的摘要（移出活跃上下文以控制 token 开销）】\n${digest}`,
+  };
+  messages.splice(1, keepFrom - 1, compactMsg);
+  return {
+    removedCount: removed.length,
+    compactDepth: 1,
+    summaryChars: compactMsg.content.length,
+    keptSummary: false,
     summaryCapReached: false,
   };
 }
@@ -1162,7 +1216,10 @@ export class AgentRuntime {
         disabled: compactDisabled,
       });
       if (compactDue) {
-        const compact = compactMessages(messages, { goal: input.goal });
+        const compact = compactMessages(messages, {
+          goal: input.goal,
+          strategy: input.compactionStrategy ?? 'rolling',
+        });
         if (compact.summaryCapReached) {
           // 摘要已到上限：停止继续压缩（旧摘要原文必须保留，不能再截断一次）。
           compactDisabled = true;
@@ -1453,7 +1510,11 @@ export class AgentRuntime {
       : this.config.search;
     const toolCfg: ToolRuntimeConfig = {
       search: searchCfg,
-      codebase: this.config.codebase,
+      codebase: {
+        ...this.config.codebase,
+        // 本 run 的测试开关：显式勾选可覆盖部署默认（默认关闭）
+        runTestsEnabled: ctx.input.allowRunTests ?? this.config.codebase.runTestsEnabled,
+      },
       // 杂项任务的扫描/单文件上限：单次任务可覆盖（收紧），但不会超过服务端配置
       misc: {
         scanLimit: Math.min(ctx.input.misc?.scanLimit ?? this.config.misc.scanLimit, this.config.misc.scanLimit),
@@ -1930,9 +1991,19 @@ export class AgentRuntime {
   }
 
   private resolveAllowedTools(input: RunInput): string[] {
+    // run_tests 是「在目标仓库执行代码」的能力：默认关闭（安全默认），
+    // 未开启时不进工具池——模型看不到它，也就不会白调一次再拿 DISABLED。
+    const runTestsOn = input.allowRunTests ?? this.config.codebase.runTestsEnabled;
     const pool =
       input.runType === 'codebase'
-        ? ['search_files', 'read_file', 'list_files', 'run_tests', 'knowledge_search', 'ask_user']
+        ? [
+            'search_files',
+            'read_file',
+            'list_files',
+            ...(runTestsOn ? ['run_tests'] : []),
+            'knowledge_search',
+            'ask_user',
+          ]
         : input.runType === 'misc'
           ? // 只读：无写文件、无命令执行、无联网；submit_result 是唯一的「产出」通道
             ['list_files', 'search_files', 'read_file', 'dir_stats', 'submit_result', 'ask_user']

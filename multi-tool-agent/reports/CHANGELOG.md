@@ -14,6 +14,7 @@
 
 | 日期 | 参数 | 旧值 | 新值 | 原因 |
 |---|---|---|---|---|
+| 2026-10-22 | 新增 `RunInput.allowRunTests`（本 run 覆盖，非环境变量） | — | 未设置 = 跟随 `CODEBASE_RUN_TESTS_ENABLED` | 运行测试是「在目标仓库执行代码」的能力：默认关闭时 `run_tests` 不进工具池；界面显式勾选才开启本 run |
 | 2026-10-21 | 新增 `COMPACT_MIN_ACTIVE_CHARS` / `COMPACT_MIN_NEW_CHARS` / `COMPACT_MIN_NEW_MESSAGES` | — | **2000 / 4000 / 4** | 压缩迟滞：累计 token 水位只作为门禁，活动区不够大或自上次压缩后没有足够新增时不再压缩，避免「水位过 60% 后每步都压」 |
 | 2026-10-21 | 新增 `COMPACT_SUMMARY_MAX_CHARS` / `COMPACT_GOAL_MAX_CHARS` | — | **24000 / 2000** | 滚动摘要上限与任务目标原文保留长度；达到上限停止压缩，旧摘要原文不截断 |
 | 2026-10-20 | 新增 `RUN_DIGEST_PATH` | — | **留空 = 跟随 SQLite 目录**（`<dataDir>/run-digest.jsonl`；`:memory:` 不落盘） | 每次 run 终态的复盘摘要 JSONL；跟随 DB 目录可让测试的临时库写到临时目录，不污染仓库 `data/` |
@@ -75,7 +76,86 @@
 
 ---
 
+## 2026-10-22
+
+### 运行测试改为「显式授权」：默认不进工具池
+
+- 背景：`CODEBASE_RUN_TESTS_ENABLED` 默认 false，但 codebase 工具池仍包含 `run_tests`。模型会调用 → 工具返回 `DISABLED` → 复盘显示「完成，但过程另有 1 类问题（DISABLED@run_tests）」。UI 主路径每次只读分析都会出现这条假问题。
+- 改动：
+  - `RunInput.allowRunTests`（本 run 覆盖）+ HTTP 校验（必须显式布尔，字符串 `"true"` 直接 400）。
+  - `AgentRuntime.resolveAllowedTools`：未开启时不把 `run_tests` 放进工具池；`ToolContext.config.codebase.runTestsEnabled` 同步按 run 覆盖。
+  - Mock 剧本自适应：工具池没有 `run_tests` 时直接收尾，并明确写「未启用运行测试，本次只做静态分析」。
+  - 前端：codebase 任务参数新增「允许运行测试」开关（默认不勾，misc 隐藏），提交时透传。
+- 实测（2026-10-22，HTTP + Mock）：
+  - 不勾：`run_mvj11vsd_b69fab7c`，completed，3 步 / 2 次工具，复盘「完成，过程无错误」。
+  - 勾选：`run_mvj11wf7_5fcb6e21`，completed，4 步 / 3 次工具，`run_tests` 6/6，复盘同样无错误。
+- 回归：`tests/61`（5 例）。
+
+### `extract_evidence` 支持结构化输入（修 Research 演示的 JSON 碎片）
+
+- 现象：`demo:research` 的 `compare_sources.items` 是被切碎的 JSON 字符串（`{"ok":true,"data":...`）。
+- 根因：Mock 剧本把 `web_search` 的原始 JSON 直接传给 `extract_evidence`，工具按句子切分 JSON。
+- 修法：新增 `toReadableText()`，JSON 输入先递归抽取 `title/snippet/description/content/...`，过滤纯 URL；畸形 JSON 回退原文。
+- 回归：`tests/60`（4 例）；修复后 Research 演示参数是正常标题与句子。
+
+### CI 等价实跑 + 演示闭环文档
+
+- 在干净 `node:24` Linux 容器里跑 CI 四步（`npm ci` → typecheck → agents:lint → test）：`npm ci` 125 包成功，406 通过 / 1 跳过（Docker 用例）/ 0 失败（当时 407 子测试）。补齐「CI 从未实跑」的空白。
+- `docs/DEMO.md` 重写为 10 分钟演示闭环：四条 Mock 命令、7 步工作台路径、HTTP 真实响应、写能力闭环、真实模型路线、证据清单、常见失败。
+- README §1 增加「预期输出 / 最小验证路径 / 常见失败」三节。
+- 验证：`npm run typecheck` 0 错误；`npm test` **61 文件 / 416 子测试全过**（Docker 已启动，0 跳过）；`npm run agents:lint` 三项通过。
+
+### 远端 CI 红：契约文档行尾跨平台不一致（BF-010）
+
+- 现场：GitHub Actions run `39549359352`（`a698c71`）在 `npm test` 失败，本机全绿。
+- 根因：`agents/*.md` 在 Windows 工作区是 CRLF，生成器输出 LF；`tests/23d` 与 `agents-lint` 严格比较字符串，把行尾当成内容。
+- 修复：两处比较前统一 `replace(/\r\n/g, '\n')`；生成器保持 LF。
+- 验证：`a698c71` + 两文件补丁在 `node:24` Linux 容器跑出 **395 通过 / 1 跳过 / 0 失败**；本机 416/416。
+- 遗留：尚未提交/推送，GitHub 上仍是红的；推送后再确认。
+
 ## 2026-10-21
+
+### 上下文压缩真实模型 A/B（P0-2：先证明，不先宣称）
+
+**背景**：R23/R25 已把滚动摘要、迟滞和窗口水位用确定性回归钉死，但此前没有真实长任务对照；单测通过只能证明实现符合预期，不能证明滚动摘要比旧策略更省或更好。
+
+**改动**：
+
+- `compactMessages` 增加 `strategy: 'rolling' | 'legacy'` 对照开关；`RunInput.compactionStrategy` 可按 run 选择，legacy 仍走 `alignCompactCut`，避免把“孤儿 tool 400”混进策略差异。
+- 新增 `src/evaluation/compactionAb.ts`（纯函数：关键词保持、重复读取、策略汇总、预注册判定、报告渲染）与 `scripts/compaction-ab.ts`（5 个只读代码分析任务 × 2 策略 × 3 次 = 30 run，真 DeepSeek / DeepSeek Flash，独立 fixture 副本）。
+- 运行时按 `4096` tokens 模拟压缩窗口，模型真实窗口 `1,048,576` 保持不变；报告明确这是**窗口假设**，不冒充 1M 窗口实测。
+- 预算硬停：默认总预算 `$1`，每个 run 另有子预算；结果落 `data/compaction-ab/<stamp>/`，不写仓库文件。
+- 新增 `npm run eval:compaction` 与 `tests/58_compaction_ab.test.ts`（7 例）。
+- 顺手修掉烟测误报：普通事故日志 `POST /login with {"email": null, "password": "x"}` 被 `secret-exfiltration` 判成外传；现在必须同时出现密钥与收件目的地才命中，`tests/53a` 加回归。
+
+**结果**（证据：`data/compaction-ab/20261021-135918-973/`，报告：`reports/COMPACTION_AB.md`）：
+
+- 30/30 run completed；rolling 15/15、legacy 15/15 都命中全部验收关键词，完成率 / 目标全中率 / 关键词平均保持率均为 100%。
+- 两者平均 steps / model calls / tool calls 都是 3 / 3 / 6；都发生 15 个 run 压缩、合计 24 次；最大摘要深度 rolling 2 vs legacy 1。
+- rolling 平均 tokens `8,896` vs legacy `8,735`（rolling 多 1.8%）；平均成本 `$0.00085` vs `$0.00083`（多 1.4%）；平均耗时 `10,115ms` vs `10,125ms`（少 0.1%）。
+- Provider 错误 / tool 错误 / 孤儿风险 run 均为 0。正式实验花费 `$0.0253`。
+- 预注册判定为 **`not_proven`（未证明）**：没有质量回退，但没有任何效率指标达到 >=15% 改善门槛；任务契约固定每文件只读一次，重复读取率被人为压平，不能算策略优势。结论只适用于本 fixture、DeepSeek Flash、4K 模拟窗口，不能外推成“滚动摘要普适更优”。
+
+**验证（当轮）**：`npm run typecheck` 0 错误；`npm test` **58 文件 / 404 子测试 / 404 通过 / 0 失败 / 0 跳过 / 约 18s**（Docker 已启动）；`npm run security:redteam` 仍为恶意 20/22、正常误报 2/20；`npm run agents:lint` 三项通过；`npm run report:refresh` 已重生。后续 R24 后全量 407。
+
+**文件**：`src/{evaluation/compactionAb,security/untrusted}.ts`、`scripts/compaction-ab.ts`、`tests/{58_compaction_ab,53_injection_boundary}.test.ts`、`package.json`、`reports/{COMPACTION_AB,CHANGELOG,PROJECT_REPORT}.md`、`README.md`、根 `AGENTS.md`。
+
+### 复盘 / 上下文压缩前端面板（R24：从 CLI/API 走到可看的界面）
+
+**背景**：`run_digest` 与 `context_compacted` 已有 DB / JSONL / CLI / API 四个入口，但前端没有展示；复盘的最后一个动作仍要离开工作台去敲命令，R24 一直挂在风险表里。
+
+**改动**：
+
+- `public/index.html` 新增「复盘」页签：支持「只看有问题的 / 全部」、状态、任务类型、最近条数筛选，以及「当前 run」快捷定位。
+- 左侧摘要列表显示状态、问题数、`headline`、类型与结束时间；右侧详情显示结论、首个问题、步骤/模型/工具/tokens/成本/事件数。
+- 压缩观测卡片显示 `count / removedMessages / maxDepth / lastSummaryChars / maxWatermark / watermarkSources / lastPromptTokens / contextWindow / capReached`；没有压缩时明确写「本 run 未触发」，不把“未触发”解释成“压缩不可用”。
+- 过程问题按 `code + source/where + count + seq + 样例消息` 展示；底部保留原始摘要 JSON。
+- 实时流新增 `context_compacted` 卡片；`run_digest` 事件到达且复盘页签打开时自动刷新列表/详情。
+- 新增 `tests/59_digest_ui.test.ts`（3 例，静态解析前端接线 + 内联脚本语法）；真实浏览器用本机 Edge headless + CDP 实测：页签可切换、真实摘要可加载、合成压缩摘要可渲染 67.1% 水位与全部压缩字段。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **59 文件 / 407 子测试 / 407 通过 / 0 失败 / 0 跳过 / 约 17s**（Docker 已启动）；`npm run agents:lint` 三项通过；`npm run report:refresh` 已重生。
+
+**影响 / 边界**：复盘从“要会命令”变成工作台内可读；历史 run 仍不回填摘要（接口 404），修复前的重复 seq 仍只影响观感；面板只读，不提供自动修复或回填。
 
 ### 压缩水位改用「模型上下文窗口 + 真实 promptTokens」（R25：修门禁语义错误）
 
@@ -92,9 +172,9 @@
 - `context_compacted` 事件新增 `watermark / watermarkSource / promptTokens / contextWindow`；`run_digest.compaction` 新增 `maxWatermark / watermarkSources / lastPromptTokens / contextWindow`，只看摘要就能解释「为什么压/为什么没压」。
 - 回归：`33m`（累计预算 90%+、当前 prompt 仅 9% → 不压）、`33n`（窗口未知 → 回退且 `source=unknown`）、`33o`（累计预算仅 50%、prompt 占窗口 61% → 压）、`33p`（usage 缺失 → 估算 + `estimated`）；`33d` 改用外部计数器（不再依赖会被压缩回退的 `callIndex`），`56f` 改为按窗口水位触发并断言新观测字段。
 
-**影响**：压缩门禁从「任务花了多少钱」变成「这次请求带了多少上下文」，语义正确；DeepSeek 预设可直接用真实窗口，其余预设未填窗口时仍会显式回退并在事件中暴露。残余：真实模型 20~30 步长任务 A/B 仍未做；其余 Provider 的窗口值未补齐（不确定就不填，避免伪造）。
+**影响**：压缩门禁从「任务花了多少钱」变成「这次请求带了多少上下文」，语义正确；DeepSeek 预设可直接用真实窗口，其余预设未填窗口时仍会显式回退并在事件中暴露。残余：真实模型 20~30 步长任务 A/B **后续已于同日完成**（30 run，结论 `not_proven`，见 `reports/COMPACTION_AB.md`）；其余 Provider 的窗口值未补齐（不确定就不填，避免伪造）。
 
-**验证**：`npm run typecheck` 0 错误；`npm test` **56 文件 / 396 子测试 / 396 通过 / 0 失败 / 0 跳过 / 约 18s**（Docker 已启动，`40j` 真跑通过）；`npm run agents:lint` 三项通过；`npm run report:refresh` 已重生；`npm run eval:edit` **7/7**（真 Docker / 真审批 / 落盘 / 回滚 / TOCTOU）。
+**验证（当轮）**：`npm run typecheck` 0 错误；`npm test` **56 文件 / 396 子测试 / 396 通过 / 0 失败 / 0 跳过 / 约 18s**（Docker 已启动，`40j` 真跑通过）；`npm run agents:lint` 三项通过；`npm run report:refresh` 已重生；`npm run eval:edit` **7/7**（真 Docker / 真审批 / 落盘 / 回滚 / TOCTOU）；后续 R24 后全量 **407**。
 
 **文件**：`src/types.ts`、`src/llm/{MockProvider,OpenAIProvider,presets}.ts`、`src/runtime/{AgentRuntime,runDigest}.ts`、`tests/{33_compact_messages,56_run_digest}.test.ts`、`docs/RUN_DIGEST.md`、`reports/{CHANGELOG,PROJECT_REPORT}.md`、根 `AGENTS.md`。
 

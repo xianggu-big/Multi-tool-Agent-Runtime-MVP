@@ -63,7 +63,9 @@ test('23d) 磁盘上的 agents/*.md 与契约一致（漂移门禁，等价于 n
   for (const [rel, expected] of Object.entries(files)) {
     const abs = resolve(rel);
     assert.ok(existsSync(abs), `缺少 ${rel}：请运行 npm run agents:docs`);
-    assert.equal(readFileSync(abs, 'utf8'), expected, `${rel} 与契约不一致：请运行 npm run agents:docs 重新生成`);
+    // 跨平台：只比较内容，不比较行尾（Windows CRLF / Linux LF 都算一致）
+    const actual = readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
+    assert.equal(actual, expected.replace(/\r\n/g, '\n'), `${rel} 与契约不一致：请运行 npm run agents:docs 重新生成`);
   }
 });
 

@@ -403,6 +403,12 @@ export interface RunInput extends RunLimits {
   allowedPermissions?: string[];
   /** Codebase 任务：被分析仓库根目录（绝对路径） */
   repoPath?: string;
+  /**
+   * Codebase 任务：本 run 是否允许在目标仓库执行白名单测试命令（如 node --test / npm test）。
+   * 缺省跟随部署配置 CODEBASE_RUN_TESTS_ENABLED（默认 false）；
+   * 未开启时 run_tests 不会进入工具池，模型也不会看到它。
+   */
+  allowRunTests?: boolean;
   /** Research 任务配置 */
   research?: {
     topics?: string[];
@@ -489,6 +495,11 @@ export interface RunInput extends RunLimits {
    * Runtime 会在 system prompt 后注入「优先读取这些文件」的提示。
    */
   contextFiles?: string[];
+  /**
+   * 上下文压缩摘要策略：rolling（默认，生产）| legacy（仅 A/B 评测对照）。
+   * legacy 复刻 R23 之前的固定切法/200 字截断/3000 字上限，不保留旧摘要与任务目标。
+   */
+  compactionStrategy?: 'rolling' | 'legacy';
 }
 
 // ---------------------------------------------------------------------------

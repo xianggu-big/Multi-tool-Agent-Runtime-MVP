@@ -183,6 +183,44 @@
   .misc-unstructured { border-color: #fed7aa; background: #fff7ed; }
   .misc-unstructured .mi b { color: #7c2d12; }
 
+  /* 复盘 / 上下文压缩面板 */
+  .digest-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0 10px; }
+  .digest-controls select { width: auto; min-width: 128px; padding: 6px 8px; }
+  .digest-controls .btn-ghost { padding: 7px 12px; }
+  .digest-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .digest-list { border: 1px solid var(--border); border-radius: 10px; max-height: 64vh; overflow: auto; background: #fbfcfe; padding: 6px; }
+  .digest-item { display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+    background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0 0 6px; }
+  .digest-item:hover { border-color: #93c5fd; }
+  .digest-item.active { border-color: var(--primary); box-shadow: 0 0 0 2px #dbeafe; }
+  .digest-item .drow { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+  .digest-item .dheadline { font-size: 12px; color: #334155; margin-top: 5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .digest-item .dmeta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .digest-detail { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: #fff; min-height: 260px; }
+  .digest-hero { border-bottom: 1px solid var(--border); padding-bottom: 9px; margin-bottom: 10px; }
+  .digest-hero .dtitle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .digest-headline { margin-top: 7px; font-size: 15px; font-weight: 700; }
+  .digest-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 10px 0; }
+  .digest-stat { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; }
+  .digest-stat b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .digest-stat span { color: var(--muted); font-size: 11px; }
+  .digest-section { margin-top: 12px; }
+  .digest-section h3 { font-size: 13px; margin: 0 0 6px; color: #334155; }
+  .compaction-card { border: 1px solid #c7d2fe; background: #eef2ff; border-radius: 10px; padding: 10px 12px; }
+  .compaction-card.warn { border-color: #fbbf24; background: #fffbeb; }
+  .compaction-card.off { border-color: var(--border); background: #f8fafc; }
+  .compaction-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .compaction-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 7px; margin-top: 8px; }
+  .compaction-grid div { background: #fff; border: 1px solid #dbe4f0; border-radius: 7px; padding: 5px 7px; font-size: 12px; }
+  .compaction-grid b { display: block; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .watermark { height: 5px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin-top: 8px; }
+  .watermark i { display: block; height: 100%; background: var(--primary); }
+  .digest-issue { font-size: 12px; }
+  .digest-empty { color: var(--muted); padding: 24px 8px; text-align: center; }
+  .digest-detail a { color: var(--primary); }
+  .digest-detail pre { white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e2e8f0;
+    border-radius: 7px; padding: 8px; margin: 6px 0 0; max-height: 260px; overflow: auto; font-size: 11px; }
+
   /* 流程监控：节点流 */
   .flow { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin-top: 8px; }
   .fnode { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: #fbfcfe; }
@@ -432,6 +470,7 @@
       <button data-tab="events">事件流</button>
       <button data-tab="trace">流程监控</button>
       <button data-tab="errors">错误</button>
+      <button data-tab="digest">复盘</button>
     </div>
 
     <!-- ============ 实时视图 ============ -->
@@ -487,6 +526,44 @@
       <h3 style="margin:12px 0 6px">最近错误（原始）</h3>
       <div id="errRecent"><div class="meta" style="color:#6b7280">—</div></div>
     </div>
+
+    <!-- ============ 复盘摘要 / 上下文压缩 ============ -->
+    <div id="tab-digest" class="hide">
+      <p class="hint">每次 run 终态自动生成结构化复盘（成功也生成）。这里按「问题优先」查看结论、过程错误聚合与上下文压缩观测；压缩卡片只记录事实，不参与成败判定。</p>
+      <div class="digest-controls">
+        <select id="digestScope" title="筛选范围">
+          <option value="problems">只看有问题的</option>
+          <option value="all">全部 run</option>
+        </select>
+        <select id="digestStatus" title="状态">
+          <option value="">全部状态</option>
+          <option value="completed">完成</option>
+          <option value="failed">失败</option>
+          <option value="limit_reached">触顶</option>
+          <option value="cancelled">取消</option>
+          <option value="awaiting_user">等待用户</option>
+        </select>
+        <select id="digestRunType" title="任务类型">
+          <option value="">全部类型</option>
+          <option value="codebase">codebase</option>
+          <option value="research">research</option>
+          <option value="misc">misc</option>
+          <option value="orchestrator">orchestrator</option>
+        </select>
+        <select id="digestLimit" title="最多加载多少条">
+          <option value="20">最近 20 条</option>
+          <option value="50" selected>最近 50 条</option>
+          <option value="100">最近 100 条</option>
+        </select>
+        <button class="btn-ghost" type="button" id="digestRefresh">刷新</button>
+        <button class="btn-ghost" type="button" id="digestCurrentBtn">当前 run</button>
+        <span class="meta" id="digestMeta" style="color:#6b7280">切到本页签自动拉取。</span>
+      </div>
+      <div class="digest-layout">
+        <div class="digest-list" id="digestList"><div class="digest-empty">加载中…</div></div>
+        <div class="digest-detail" id="digestDetail"><div class="digest-empty">选择左侧一条复盘摘要。</div></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -505,6 +582,10 @@
   <div class="rpbox" id="codebaseFields">
     <label id="repoPathLabel">仓库 / 工作区路径</label>
     <input id="repoPath" placeholder="demo/codebase-sample 或 D:/path/to/repo" value="demo/codebase-sample" />
+    <div id="runTestsWrap">
+      <label class="check"><input type="checkbox" id="allowRunTests" /> 允许运行测试（在仓库内执行白名单命令，如 node --test）</label>
+      <p class="hint">默认关闭：不勾选时 <code>run_tests</code> 不会进入工具池，本次只做只读分析。测试命令只允许白名单模板（<code>node --test</code> / <code>npm test</code>），不经 shell。</p>
+    </div>
   </div>
 
   <div class="goalbox">
@@ -672,6 +753,7 @@
     // auto 也要显示（它可能被分流到需要工作区的 Agent）
     const needWorkspace = t === 'auto' || NEEDS_WORKSPACE.includes(t);
     $('codebaseFields').classList.toggle('hide', !needWorkspace);
+    $('runTestsWrap').classList.toggle('hide', t === 'misc');
     $('researchFields').classList.toggle('hide', t !== 'research');
     $('miscFields').classList.toggle('hide', t !== 'misc');
     $('orchestrationFields').classList.toggle('hide', t !== 'orchestrator');
@@ -1874,6 +1956,21 @@
         raw(c, e);
         break;
       }
+      case 'context_compacted': {
+        const compactDepth = d.depth ?? '?';
+        const compactRemoved = d.removedMessages ?? '?';
+        const compactWm = Number(d.watermark);
+        const compactWmText = Number.isFinite(compactWm)
+          ? `${(compactWm * 100).toFixed(1)}%（${d.watermarkSource || '?'}）`
+          : '—';
+        const c = mkCard('compact:' + e.seq, 'llm', '上下文压缩', `depth ${compactDepth} · step ${d.step ?? '?'}`);
+        c._refs.body.classList.remove('closed');
+        c._refs.say.textContent = `移除 ${compactRemoved} 条消息 · 摘要 ${d.summaryChars ?? '?'} 字符 · 上下文水位 ${compactWmText}` +
+          (d.capReached ? '\n已触及摘要上限，后续停止压缩。' : '');
+        setStatus(c, d.capReached ? '已触顶' : '已压缩', d.capReached ? 'err' : 'ok');
+        raw(c, e);
+        break;
+      }
       case 'checkpoint_saved': {
         const c = mkCard('cp:' + (e.seq || Math.random()), 'user', '检查点已保存', `step ${d.step ?? '?'}`);
         setStatus(c, '已保存', 'ok');
@@ -1890,6 +1987,12 @@
         c._refs.dur.textContent = fmtMs(d.durationMs);
         raw(c, e);
         setPhase('已完成', 'done');
+        break;
+      }
+      case 'run_digest': {
+        if (!$('tab-digest').classList.contains('hide')) {
+          void fetchDigests(currentId || String(e.runId || ''));
+        }
         break;
       }
       case 'run_awaiting_user': {
@@ -2187,9 +2290,10 @@
     b.onclick = () => {
       document.querySelectorAll('.tabs button').forEach((x) => x.classList.remove('active'));
       b.classList.add('active');
-      ['live','events','trace','errors'].forEach((t) => $('tab-' + t).classList.toggle('hide', b.dataset.tab !== t));
+      ['live','events','trace','errors','digest'].forEach((t) => $('tab-' + t).classList.toggle('hide', b.dataset.tab !== t));
       if (b.dataset.tab === 'trace' && currentId) fetchTrace(currentId);
       if (b.dataset.tab === 'errors') fetchErrorSummary();
+      if (b.dataset.tab === 'digest') void fetchDigests(currentId || null);
     };
   });
 
@@ -2233,6 +2337,195 @@
     }
   }
   $('errRefresh').onclick = fetchErrorSummary;
+
+  // ---------------- 复盘摘要 / 上下文压缩（R24） ----------------
+  const DIGEST_STATUS_LABEL = {
+    completed: '完成', failed: '失败', limit_reached: '触顶', cancelled: '取消', awaiting_user: '等待用户',
+  };
+  const DIGEST = { list: [], selected: null, listReq: 0, detailReq: 0 };
+
+  function digestStatusPill(status, issueCount) {
+    const s = String(status || '');
+    const cls = s === 'completed' ? 'completed' : s === 'awaiting_user' ? 'awaiting_user' : 'failed';
+    let html = `<span class="pill ${cls}">${escapeHtml(DIGEST_STATUS_LABEL[s] || s || '?')}</span>`;
+    if (issueCount > 0) html += `<span class="pill awaiting_user">⚑ ${issueCount} 类问题</span>`;
+    return html;
+  }
+
+  function fmtDigestNum(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toLocaleString('zh-CN') : '—';
+  }
+
+  function fmtDigestDate(v) {
+    return String(v || '').replace('T', ' ').slice(0, 19) || '—';
+  }
+
+  function fmtDigestCost(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? `$${n.toFixed(6)}` : '—';
+  }
+
+  function renderDigestList() {
+    const box = $('digestList');
+    if (!DIGEST.list.length) {
+      box.innerHTML = '<div class="digest-empty">没有匹配的复盘摘要。<br/>试试切到「全部 run」或放宽状态筛选。</div>';
+      return;
+    }
+    box.innerHTML = DIGEST.list.map((x) => {
+      const issueCount = Number(x.issueCount) || 0;
+      const active = x.runId === DIGEST.selected ? ' active' : '';
+      const meta = `${x.runType || '?'} · ${fmtDigestDate(x.finishedAt)}${x.isMock ? ' · Mock' : ''}${x.failureCode ? ` · ${x.failureCode}` : ''}`;
+      return `<button type="button" class="digest-item${active}" data-digest-run="${escapeHtml(String(x.runId))}">
+        <div class="drow">${digestStatusPill(x.status, issueCount)}<span class="meta">${escapeHtml(fmtDigestDate(x.finishedAt))}</span></div>
+        <div class="dheadline">${escapeHtml(String(x.headline || '（无 headline）'))}</div>
+        <div class="dmeta">${escapeHtml(meta)}</div>
+      </button>`;
+    }).join('');
+    box.querySelectorAll('[data-digest-run]').forEach((b) => {
+      b.onclick = () => selectDigest(b.dataset.digestRun);
+    });
+  }
+
+  async function fetchDigests(preferredRunId) {
+    const q = new URLSearchParams();
+    q.set('limit', $('digestLimit').value || '50');
+    if ($('digestScope').value === 'problems') q.set('onlyProblems', '1');
+    const status = $('digestStatus').value;
+    const runType = $('digestRunType').value;
+    if (status) q.set('status', status);
+    if (runType) q.set('runType', runType);
+    const req = ++DIGEST.listReq;
+    $('digestMeta').textContent = '加载中…';
+    try {
+      const r = await fetch('/api/digests?' + q.toString());
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      if (req !== DIGEST.listReq) return;
+      DIGEST.list = Array.isArray(data.digests) ? data.digests : [];
+      $('digestMeta').textContent = `共 ${data.count ?? DIGEST.list.length} 条 · 问题优先=${data.onlyProblems ? '是' : '否'}`;
+      const keep = (preferredRunId && DIGEST.list.some((x) => x.runId === preferredRunId))
+        ? preferredRunId
+        : (DIGEST.selected && DIGEST.list.some((x) => x.runId === DIGEST.selected))
+          ? DIGEST.selected
+          : (DIGEST.list[0] && DIGEST.list[0].runId);
+      DIGEST.selected = keep || null;
+      renderDigestList();
+      if (keep) await selectDigest(keep);
+      else $('digestDetail').innerHTML = '<div class="digest-empty">选择左侧一条复盘摘要。</div>';
+    } catch (e) {
+      if (req !== DIGEST.listReq) return;
+      $('digestMeta').textContent = '拉取失败';
+      $('digestList').innerHTML = `<div class="digest-empty" style="color:#dc2626">拉取失败：${escapeHtml(String((e && e.message) || e))}</div>`;
+    }
+  }
+
+  async function selectDigest(runId) {
+    if (!runId) return;
+    DIGEST.selected = String(runId);
+    renderDigestList();
+    const req = ++DIGEST.detailReq;
+    $('digestDetail').innerHTML = '<div class="digest-empty">加载中…</div>';
+    try {
+      const r = await fetch('/api/runs/' + encodeURIComponent(runId) + '/digest');
+      if (req !== DIGEST.detailReq) return;
+      if (!r.ok) {
+        let msg = 'HTTP ' + r.status;
+        try { msg = (await r.json()).error || msg; } catch {}
+        $('digestDetail').innerHTML = `<div class="digest-empty">${escapeHtml(msg)}</div>`;
+        return;
+      }
+      const d = await r.json();
+      if (req !== DIGEST.detailReq) return;
+      renderDigestDetail(d);
+    } catch (e) {
+      if (req !== DIGEST.detailReq) return;
+      $('digestDetail').innerHTML = `<div class="digest-empty" style="color:#dc2626">拉取失败：${escapeHtml(String((e && e.message) || e))}</div>`;
+    }
+  }
+
+  function renderDigestDetail(d) {
+    const c = d.counters || {};
+    const counts = d.counts || {};
+    const issues = Array.isArray(d.issues) ? d.issues : [];
+    const first = d.firstIssue;
+    const comp = d.compaction;
+    const watermark = comp && Number.isFinite(Number(comp.maxWatermark))
+      ? Math.max(0, Math.min(1, Number(comp.maxWatermark))) : null;
+    const issueTotal = issues.reduce((n, x) => n + (Number(x.count) || 0), 0);
+    const stat = (label, value) => `<div class="digest-stat"><b>${escapeHtml(String(value))}</b><span>${escapeHtml(label)}</span></div>`;
+    const firstHtml = first
+      ? `<div class="meta" style="margin-top:5px;color:#b45309">首个问题：<code>${escapeHtml(String(first.code || '?'))}</code> @ seq ${escapeHtml(String(first.seq ?? '-'))}${first.where ? ` · ${escapeHtml(String(first.where))}` : ''}</div>`
+      : '';
+    const compHtml = comp
+      ? `<div class="compaction-card${comp.capReached ? ' warn' : ''}">
+          <div class="compaction-head"><b>上下文压缩</b><span class="meta">发生 ${fmtDigestNum(comp.count)} 次 · 最大深度 ${fmtDigestNum(comp.maxDepth)}</span></div>
+          <div class="compaction-grid">
+            <div><b>${fmtDigestNum(comp.removedMessages)}</b>移除消息（累计）</div>
+            <div><b>${fmtDigestNum(comp.lastSummaryChars)}</b>最后摘要字符数</div>
+            <div><b>${watermark == null ? '—' : `${(watermark * 100).toFixed(1)}%`}</b>最大上下文水位</div>
+            <div><b>${fmtDigestNum(comp.lastPromptTokens)} / ${fmtDigestNum(comp.contextWindow)}</b>prompt tokens / 窗口</div>
+            <div><b>${escapeHtml((comp.watermarkSources || []).join('、') || '—')}</b>水位来源</div>
+            <div><b>${comp.capReached ? '已触顶' : '未触顶'}</b>24000 字符上限</div>
+          </div>
+          <div class="watermark" title="最大上下文水位"><i style="width:${((watermark ?? 0) * 100).toFixed(1)}%"></i></div>
+          <div class="meta" style="margin-top:4px">水位 = prompt tokens / 模型上下文窗口；只用于观测，不参与 ok 判定${comp.capReached ? '；摘要已触顶，后续停止压缩' : ''}。</div>
+        </div>`
+      : `<div class="compaction-card off">
+          <div class="compaction-head"><b>上下文压缩</b><span class="meta">本 run 未触发</span></div>
+          <div class="meta" style="margin-top:5px">没有 <code>context_compacted</code> 事件；通常表示上下文未到水位，不代表压缩不可用。摘要上限 24000 字符，达到后停止压缩。</div>
+        </div>`;
+    const issueRows = issues.map((x) => {
+      const seq = x.firstSeq === x.lastSeq ? String(x.firstSeq ?? '-') : `${x.firstSeq ?? '-'}–${x.lastSeq ?? '-'}`;
+      return `<tr><td><code>${escapeHtml(String(x.code || '?'))}</code></td>
+        <td>${escapeHtml(String(x.source || '?'))}${x.where ? ` / ${escapeHtml(String(x.where))}` : ''}</td>
+        <td style="text-align:right">${escapeHtml(String(x.count ?? '?'))}</td>
+        <td>${escapeHtml(seq)}</td>
+        <td>${escapeHtml(String(x.message || '').slice(0, 240))}</td></tr>`;
+    }).join('');
+    const issuesHtml = issues.length
+      ? `<table class="err-table digest-issue"><thead><tr><th>错误码</th><th>来源 / 位置</th><th>次数</th><th>seq</th><th>样例消息</th></tr></thead><tbody>${issueRows}</tbody></table>`
+      : '<div class="meta" style="color:#16a34a">没有过程错误 ✅</div>';
+    $('digestDetail').innerHTML = `
+      <div class="digest-hero">
+        <div class="dtitle">${digestStatusPill(d.status, issues.length)}<code>${escapeHtml(String(d.runId || ''))}</code>
+          <span class="meta">${escapeHtml(String(d.runType || '?'))} · ${escapeHtml(fmtDigestDate(d.finishedAt))}</span>
+          <a href="/api/runs/${encodeURIComponent(String(d.runId || ''))}/digest" target="_blank" rel="noopener">JSON</a>
+        </div>
+        <div class="digest-headline">${escapeHtml(String(d.headline || '（无 headline）'))}</div>
+        <div class="meta" style="margin-top:5px">耗时 ${fmtMs(d.durationMs)}${d.errorCode ? ` · 错误码 ${escapeHtml(String(d.errorCode))}` : ''}${d.failureReason ? ` · ${escapeHtml(String(d.failureReason).slice(0, 220))}` : ''}</div>
+        ${firstHtml}
+      </div>
+      <div class="digest-stats">
+        ${stat('步骤', fmtDigestNum(c.steps))}
+        ${stat('模型调用', fmtDigestNum(c.modelCalls))}
+        ${stat('工具调用', fmtDigestNum(c.toolCalls))}
+        ${stat('tokens', fmtDigestNum(c.totalTokens))}
+        ${stat('成本', fmtDigestCost(c.costUsd))}
+        ${stat('事件数', fmtDigestNum((d.eventStats || {}).total))}
+      </div>
+      <div class="digest-section"><h3>压缩观测</h3>${compHtml}</div>
+      <div class="digest-section"><h3>过程问题（${issues.length} 类 / ${issueTotal} 次）</h3>${issuesHtml}</div>
+      <div class="digest-section" style="display:flex;gap:12px;flex-wrap:wrap">
+        <span class="meta">工具失败 ${fmtDigestNum(counts.toolFails)}</span>
+        <span class="meta">运行时错误 ${fmtDigestNum(counts.runtimeErrors)}</span>
+        <span class="meta">子任务失败 ${fmtDigestNum(counts.subtaskFailed)}</span>
+        <span class="meta">审批拒绝 ${fmtDigestNum(counts.approvalDenied)}</span>
+        <span class="meta">验证失败 ${fmtDigestNum(counts.verifyFailed)}</span>
+        <span class="meta">注入标记 ${fmtDigestNum(counts.untrustedFlagged)}</span>
+      </div>
+      <details class="digest-section"><summary>原始摘要 JSON</summary><pre>${escapeHtml(JSON.stringify(d, null, 2))}</pre></details>`;
+  }
+
+  ['digestScope', 'digestStatus', 'digestRunType', 'digestLimit'].forEach((id) => {
+    $(id).onchange = () => fetchDigests();
+  });
+  $('digestRefresh').onclick = () => fetchDigests(DIGEST.selected);
+  $('digestCurrentBtn').onclick = () => {
+    if (currentId) fetchDigests(currentId);
+    else $('digestMeta').textContent = '当前还没有 run（先启动一个任务）';
+  };
+  $('digestCurrentBtn').disabled = true;
 
   // ---------------- 可视化监控：拉取 trace 快照 ----------------
   async function fetchTrace(id) {
@@ -2567,6 +2860,8 @@
       }
       body.repoPath = rp;
     }
+    // 运行测试：本 run 显式授权（默认关闭）；不勾选 = 只读分析，run_tests 不进工具池
+    if (runType === 'codebase') body.allowRunTests = $('allowRunTests').checked;
     if (runType === 'misc') {
       body.misc = { subtask: $('miscSubtask').value || undefined };
       // 杂项默认收紧预算（服务端还有硬上限，放宽也不会生效）
@@ -2631,6 +2926,7 @@
     const created = await res.json();
     const runId = created.runId;
     currentId = runId;
+    $('digestCurrentBtn').disabled = false;
     saveSessionOnStart(runId, body.goal, runType);
     renderEffectiveLlm(created.llm);
     if (created.miscLimits) {

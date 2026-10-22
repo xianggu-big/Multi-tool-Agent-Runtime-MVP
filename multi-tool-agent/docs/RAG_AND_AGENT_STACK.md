@@ -1,7 +1,7 @@
 # RAG 与 Agent 应用栈（P0/P1/P2 实现手册）
 
 > 这份文档回答一组面试高频问题，但**每个结论都对应本仓可运行代码与可复跑证据**，不是概念摘抄。
-> 最后更新：2026-10-19 ｜ 新增测试：`tests/43~47`（26 例） ｜ 评测生成物：`reports/RAG_EVAL.md`、`reports/RAG_ABLATION.md`
+> 最后更新：2026-10-21 ｜ RAG 测试：`tests/43~47`（26 例） ｜ 上下文压缩真实 A/B 见 `reports/COMPACTION_AB.md`（预注册结论 `not_proven`，不要外推） ｜ 评测生成物：`reports/RAG_EVAL.md`、`reports/RAG_ABLATION.md`
 
 ## 0. 速查：问题 → 代码 → 证据
 

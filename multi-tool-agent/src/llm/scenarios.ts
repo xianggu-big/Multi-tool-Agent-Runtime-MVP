@@ -47,8 +47,9 @@ function tc(id: string, name: string, args: Record<string, unknown>): ToolCall {
 
 /** Codebase 演示：search -> read -> run_tests -> 最终答案 */
 export function codebaseDemoResponder(goal: string): MockResponder {
-  return ({ messages, callIndex }) => {
+  return ({ messages, callIndex, tools }) => {
     const last = lastToolResult(messages);
+    const canRunTests = tools.some((t) => t.name === 'run_tests');
     if (callIndex === 0 || !last) {
       return {
         stopReason: 'tool_use',
@@ -65,6 +66,17 @@ export function codebaseDemoResponder(goal: string): MockResponder {
       };
     }
     if (last.toolName === 'read_file') {
+      if (!canRunTests) {
+        return {
+          stopReason: 'end_turn',
+          content:
+            `【Codebase 分析完成】\n目标：${goal}\n` +
+            `1) 通过 search_files 定位到相关源文件。\n` +
+            `2) 通过 read_file 阅读了实现细节。\n` +
+            `3) 未启用运行测试（未勾选「允许运行测试」），本次只做静态分析，未执行仓库代码。\n` +
+            `结论：已完成只读分析；如需验证行为，请勾选「允许运行测试」后重跑。`,
+        };
+      }
       return {
         stopReason: 'tool_use',
         content: `已读取实现，运行受限测试验证行为。`,

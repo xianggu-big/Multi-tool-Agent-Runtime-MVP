@@ -37,6 +37,7 @@ npm start
 npm run smoke:stream
 # 9) 可选评测（编辑管线需 Docker；红队不需要 Key）
 npm run eval:edit          # 7 个编辑管线场景 → reports/EDIT_EVAL.md
+npm run eval:compaction    # 上下文压缩 A/B（30 run；需 DEEPSEEK_API_KEY，约 $0.03）→ reports/COMPACTION_AB.md
 npm run security:redteam   # 42 条注入样本 → reports/INJECTION_REDTEAM.md
 npm run digest:list         # 每次 run 的复盘摘要（成功也记；默认只看有问题的）
 ```
@@ -51,7 +52,7 @@ npm run digest:list         # 每次 run 的复盘摘要（成功也记；默认
 > # 用你实际要运行的那个 Node 来执行；PowerShell 里直接敲即可
 > rm -rf node_modules/better-sqlite3/build
 > npm rebuild better-sqlite3
-> npm test          # 应 386/386 通过
+> npm test          # 应 416/416 通过
 > ```
 > 上面删不掉或重建仍失败时，用强制重装：
 > ```bash
@@ -66,6 +67,47 @@ npm run digest:list         # 每次 run 的复盘摘要（成功也记；默认
 - 启用真实 LLM：**DeepSeek 已端到端验证**（2026-10-13，真实 API 跑通完整 Agent Loop，含工具调用与流式思考）。在 `.env` 配置 `LLM_MODE=openai` + `LLM_PROVIDER=deepseek` + `DEEPSEEK_API_KEY=...`，或直接在界面上选 DeepSeek 并填 Key（见 §2.1）。其它预设（openai/qwen/moonshot/zhipu/ollama）代码路径相同但**本环境无 Key、未实测**。
 - 启用真实联网搜索：配置 `SEARCH_PROVIDER=serper` + `SEARCH_API_KEY=...`。**该路径已实现但未经端到端验证**（本环境无 Key）。
 - **也可以直接在界面里配**：启动服务后打开前端，展开左侧「LLM / 搜索 / 实时流 配置」面板即可选服务商、选模型、填 Key、调参数，无需改 `.env`、无需重启。详见 §2.1 与 `docs/LLM_CONFIG.md`。
+- **运行测试是显式能力**：`run_tests` 默认关闭（默认只读）。需要时在任务参数里勾选「允许运行测试」，或设 `CODEBASE_RUN_TESTS_ENABLED=1`。未开启时它不会进入工具池。
+- **完整演示脚本**：见 `docs/DEMO.md`（10 分钟主路径 + 每步预期 + 常见失败）。
+
+### 1.1 预期输出（每步应该看到什么）
+
+| 命令 / 操作 | 预期 |
+| --- | --- |
+| `npm install` | 无 `ERR_DLOPEN_FAILED`；better-sqlite3 与当前 Node 24 匹配 |
+| `npm run typecheck` | 无输出（0 错误） |
+| `npm test` | `tests 416 / pass 416 / fail 0`（Docker 未启动时 `40j` 跳过，其余必须全绿） |
+| `npm run demo:codebase` | `status=completed`，4 步 / 4 次模型 / 3 次工具；示例仓库测试 6/6 |
+| `npm run demo:research` | `status=completed`，4 步 / 3 次工具；首行标注「基于 MOCK 离线资料」 |
+| `npm run demo:misc` | `status=completed`，2 步；输出结构化结论 |
+| `npm run demo:orchestrator` | 2 个子任务并行且均 `ok`；汇总里如实列出未解决项 |
+| `npm run agents:lint` | 三项门禁全过 |
+| `npm run doctor` | Node / sqlite-vec / 数据目录 / 端口为 ok；Docker 与 Key 可为 warn |
+| `npm start` | 打开 `http://localhost:3000`，右侧五个页签：实时 / 事件流 / 流程监控 / 错误 / 复盘 |
+
+### 1.2 最小验证路径（怀疑环境有问题时按这个顺序）
+
+```bash
+npm run typecheck          # 1) 编译
+npm test                   # 2) 全量回归
+npm run demo:codebase      # 3) 真实跑一次 Agent Loop（Mock）
+npm run doctor             # 4) 环境体检
+npm start                  # 5) 打开 UI，提交一个 codebase 任务
+```
+
+任何一步不符合上表，先停在那一层排查，不要直接怀疑模型或业务逻辑。
+
+### 1.3 常见失败
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `ERR_DLOPEN_FAILED` / `NODE_MODULE_VERSION` | 原生模块按另一个 Node 版本编译 | 删 `node_modules/better-sqlite3/build` → `npm rebuild better-sqlite3` |
+| 模型调了 `run_tests` 但没执行 | 默认关闭（安全默认） | 勾选「允许运行测试」，或设 `CODEBASE_RUN_TESTS_ENABLED=1` |
+| 写能力开关置灰 | `CODEBASE_WRITE_ENABLED=false` | 改环境变量并重启 |
+| 端口被占用 | 3000 被其它进程占用 | `PORT=3939 npm start` |
+| 改了代码但行为没变 | `npm start` 无热重载 | 重启服务；开发用 `npm run dev` |
+| 复盘显示「完成，但过程另有问题」 | 过程里确有工具失败/审批拒绝等 | 在「复盘」页看首个问题与 seq，不要只看最终状态 |
+| 测试卡住 | Docker 未启动或镜像缺失 | 启动 Docker；`node scripts/sandbox/build-image.mjs` |
 
 ---
 
@@ -132,6 +174,7 @@ npm run digest:list         # 每次 run 的复盘摘要（成功也记；默认
 - **杂项子 Agent（misc）**：只读、小预算、默认关闭思考，专治琐事；结论结构化（`submit_result` 终结性工具）；超出能力范围时主动上报 `escalateTo`（codebase / research / human），界面提供「一键改派」。详见 `docs/MISC_AGENT.md`。
 - **统一错误报告**：每个错误都有 `id / 位置(file:line) / 类型 / 错误码 / 原因 / 上下文`，同时落三处——`runtime_error` 事件（界面红色卡片）、`data/errors.log`（JSONL）、`GET /api/errors`；工具参数报错会**直接附正确示例**；浏览器脚本错误也会上报到同一份报告。详见 `docs/ERROR_REPORTING.md`。
 - **复盘摘要（每次 run 结束都记）**：不管成功还是失败，终态都会自动落一份 `run_digest` —— 结论（`ok/errorCode/failureReason`）、资源计数、**过程中的错误聚合**（工具失败 / 运行时错误 / 子任务失败 / 审批拒绝 / 验证失败 / 回滚 / 注入命中，含次数与首个 seq）、以及一句话 `headline`。**成功也会记**（会写「完成，但过程另有 N 类问题」），进程被杀的 run 由启动回收补 `RUN_INTERRUPTED`。查看：`npm run digest:list`（默认只看有问题的）、`GET /api/digests`、`GET /api/runs/:id/digest`；落盘 `data/run-digest.jsonl`。详见 `docs/RUN_DIGEST.md`。
+- **复盘 / 压缩面板（R24）**：前端「复盘」页签可按问题/状态/类型筛选摘要，查看结论、首个问题、过程问题表、原始 JSON 与**上下文压缩观测**（次数/移除消息/深度/摘要字符/水位/窗口/是否触顶）；没有压缩时明确标注“未触发”。实时流会显示 `context_compacted` 卡片，`run_digest` 到达后自动刷新。回归 `tests/59`。
 - **多 Agent 编排（orchestrator）**：主 Agent 拆分 → **并行**派发子 Agent（有界并发池 + 级联取消 + 部分失败显式化）→ 汇总核验。子 Agent 由**契约（spec）**驱动：工具白名单、权限、预算、上报格式全部声明在 `src/agents/specs.ts`；`agents/*.md` 由契约**生成**，`npm run agents:lint` 做漂移门禁。界面「实时」可见每个子任务卡片，「流程监控」可见并行 span。详见 `designs/multi-tool-agent-harness-design-v1.md`。
 - **受控写能力（沙箱 + 三级人工审批，UI 可用）**：编排模式下勾选「允许修改文件」后，`code-edit` 子 Agent 可修改文件——改动**先在 Docker 沙箱暂存并跑检查阶梯（语法/类型/测试）**，落盘前**弹出审批卡**由你决定（完全同意此文件 / 仅同意本次 / 拒绝），通过后落盘并跑宿主复验（失败自动回滚）。未勾选 = 只读（fail-closed，后端四处接线保证绕不过去）；检测到「修改文件」意图但未开启写能力时，界面会弹确认对话框引导（而不是静默不改）。部署可用 `CODEBASE_WRITE_ENABLED=false` 整机禁用。落盘后可手动发起「深度验证（L2）」并在 UI 查看通过/失败证据与取消状态。详见 `docs/WRITE_AND_APPROVAL.md`。
 - **崩溃对账 / 恢复（落盘意图日志）**：落盘前先把本批意图（原文哈希 / 新内容哈希 / 每个文件状态）写进 `data/backups/<runId>/apply-journal.json`。进程在「逐文件 rm→rename」窗口内被杀后，服务启动会扫描 `data/backups/*`，把每个文件判定为已落盘 / 未落盘 / 消失 / 冲突 / 未知；只自动恢复「编辑 + 文件消失 + 有备份」这一种确定性坏状态，已落盘的编辑/新增**不会**自动回滚。UI 会显示恢复卡，由你选择回滚或保留；旧版本无日志 / 日志损坏时只做人工比对。API：`GET /api/runs/:id/recovery`、`POST /api/runs/:id/recovery/rollback|accept`。详见 `docs/WRITE_AND_APPROVAL.md` §3.9。
@@ -199,11 +242,12 @@ scripts/stream-smoke.ts    # 实时流式链路冒烟（实测帧间隔与推送
 scripts/llm-smoke.ts       # 真实 LLM 端到端冒烟（默认 DeepSeek，含参数与 token 统计）
 scripts/gen-run-report.ts  # 单 run 报告生成器（Mermaid 流程图 + 分层量化 + 六阶段归因）
 scripts/edit-eval.ts       # 编辑管线评测（真 Docker / 审批 / 落盘 / 宿主复验 / 回滚）
+scripts/compaction-ab.ts   # 上下文压缩 A/B（真实模型，5 任务 × 2 策略 × 3 次）
 scripts/injection-redteam.ts # 提示注入红队评测（固定样本集；报告保留漏检与误报）
-tests/                     # 56 个场景文件、386 个子测试（node:test + tsx）
+tests/                     # 61 个场景文件、416 个子测试（node:test + tsx）
 eval/edit-fixture/         # 编辑评测独立夹具（不污染 demo/codebase-sample）
 demo/codebase-sample/      # 供 Codebase Agent 分析的示例仓库（6/6 测试通过）
-public/index.html          # 前端工作台（实时 / 事件流 / 流程监控 三个视图）
+public/index.html          # 前端工作台（实时 / 事件流 / 流程监控 / 错误 / 复盘）
 reports/                   # ★ 核心项目报告 + 专项评测（生成物）+ runs/（本地证据缓存，不入库）
 docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPORT / TRACE_VISUALIZATION / STREAMING_LIVE_VIEW / LLM_CONFIG / MISC_AGENT / ERROR_REPORTING / RUN_DIGEST
 ```
@@ -222,6 +266,7 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/PARALLEL_AB.md` —— **并行 vs 串行 A/B 量化**（人写）：换实验就加一节，保留「口径与边界」。
 - `reports/RAG_EVAL.md` —— **RAG P0 评测**（生成物）：切块/混合检索/rerank 质量 + Flat/HNSW/IVF 召回-延迟；`npm run rag:bench`。
 - `reports/RAG_ABLATION.md` —— **RAG 消融**（生成物）：chunk 大小/overlap 与 embedding 维度对 Recall/MRR/nDCG/存储的影响；`npm run rag:ablation`。
+- `reports/COMPACTION_AB.md` —— **上下文压缩 A/B**（生成物）：rolling vs legacy 的 30 run 真实模型对照、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论是 `not_proven`，不要外推成“滚动摘要更优”。
 - `reports/EDIT_EVAL.md` —— **编辑管线评测**（生成物）：真 Docker + 真审批 + 真落盘 + 宿主复验/回滚，7 个确定性场景；`npm run eval:edit`。**注意：衡量管线，不是模型编辑智力**。
 - `reports/INJECTION_REDTEAM.md` —— **提示注入红队评测**（生成物）：42 条恶意/正常/已知缺口样本；当前恶意检出 20/22、正常误报 2/20；`npm run security:redteam`。**是启发式降风险，不是防住注入**。
 - `reports/PROVIDER_BENCHMARK.md` —— **Provider 横评**（人写）：DeepSeek 已实测，其余家有 Key 再补测回填。
@@ -233,13 +278,13 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 
 - `docs/ARCHITECTURE.md` —— 架构、模块职责、真实 Agent Loop 流程、Tool Registry 安全边界、状态机与恢复、已知缺陷。
 - `docs/RAG_AND_AGENT_STACK.md` —— **RAG / Agent 应用栈实现手册**：chunk 与 embedding 取舍、HNSW vs IVF、RRF + rerank 实测、MCP / function calling、慢回答诊断、流式与中断、LangGraph / LoRA / vLLM 显存估算。
-- `docs/RUN_DIGEST.md` —— **复盘摘要手册**：每次 run 终态都写（成功也写/失败优先）、三落点、字段口径、`npm run digest:list` 用法、6 条诚实边界。
+- `docs/RUN_DIGEST.md` —— **复盘摘要手册**：每次 run 终态都写（成功也写/失败优先）、三落点、字段口径、`npm run digest:list` 用法、前端「复盘」页签与压缩观测的边界、6 条诚实边界。
 - `docs/HUMAN_IN_THE_LOOP.md` —— **人机协同手册**：ask_user 工具、awaiting_user 终态、与写操作审批的区别、问题落库/展示、回答后如何继续（新一轮 + contextHistory）。
 - `docs/PRODUCT_READINESS.md` —— **产品化路线**：从 MVP 到本地可用的代码 Agent 的验收阈值、四道门、简历叙事与“现在不该做什么”。
 - `docs/WRITE_PRINCIPLES.md` —— **写能力设计原则**（方针层）：写能力为何必须始终保留 / 与聊天机器人的关键差异 / 审核机制（四道闸）与回溯机制（四层）设计 / 反模式与自检清单。**改写路径前先读**。
 - `docs/SECURITY_BOUNDARIES.md` —— **安全边界**：不可信内容威胁模型、四层防线（结构/写入门禁/内容边界/审计恢复）、run 污点与审批降权、高危动作禁用粘性 + 当前批次二次确认、红队结果与诚实边界。
 - `docs/DESIGN_DECISIONS.md` —— 关键技术决策（为何选 `node:test` + `tsx`、Mock 优先、SQLite 等）。
-- `docs/DEMO.md` —— 两个演示的运行方式与真实结果。
+- `docs/DEMO.md` —— **演示闭环**：四条 Mock 命令、7 步工作台主路径、HTTP 真实响应、写能力闭环、真实模型路线、证据清单与常见失败。
 - `docs/TEST_REPORT.md` —— 测试真实运行结果（通过 / 失败数量、各场景结论）。
 - `docs/TRACE_VISUALIZATION.md` —— 可视化监控系统的设计与实现（检测模块 + 流程图 + 瀑布图）。
 - `docs/ERROR_REPORTING.md` —— **错误报告与故障排查**：多 Agent 跑不通的真实事故复盘（8 条根因 + 前后对比）、错误报告的四要素与三个落点、`/api/errors` 用法、错误码速查表、已知限制。**遇到问题先看这份**。

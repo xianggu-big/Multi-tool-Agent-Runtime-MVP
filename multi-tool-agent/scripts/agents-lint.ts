@@ -36,8 +36,9 @@ for (const [rel, expected] of Object.entries(files)) {
     drift += 1;
     continue;
   }
-  const actual = readFileSync(abs, 'utf8');
-  if (actual !== expected) {
+  // 跨平台：Windows 工作区可能是 CRLF，生成器输出 LF；行尾差异不应算文档漂移。
+  const actual = readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
+  if (actual !== expected.replace(/\r\n/g, '\n')) {
     console.log(`  ✗ 文档与契约不一致: ${rel}（运行 npm run agents:docs 重新生成）`);
     drift += 1;
   }

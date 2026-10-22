@@ -6,6 +6,7 @@ import {
   COMPACT_KEEP_TAIL,
   COMPACT_SUMMARY_MAX_CHARS,
   COMPACT_TRIGGER_RATIO,
+  LEGACY_SUMMARY_MAX_CHARS,
   resolveCompactWatermark,
   shouldCompactContext,
 } from '../src/runtime/AgentRuntime.js';
@@ -458,4 +459,19 @@ test('33p) usage 缺失但窗口已知 → 字符数估算 token，并标记 est
     model: 'custom-model',
   });
   assert.equal(unknownWindow.contextWindow, undefined, '没有预设窗口时必须保持未知，不能编造');
+});
+test('33q) legacy 对照策略：不保留旧摘要/目标，但仍不得产生孤儿 tool', () => {
+  const oldSummary =
+    '【上下文压缩 depth=2 total=9（旧摘要）】\n' + 'x'.repeat(300) + ' OLD-KEEP-ME';
+  const msgs = makeToolHeavyMessages([2, 2, 2]);
+  msgs.splice(1, 0, { role: 'user', content: oldSummary });
+  const result = compactMessages(msgs, { strategy: 'legacy', goal: 'ACCEPT-42 必须保留' });
+
+  assert.ok(result.removedCount > 0, 'legacy 应执行压缩');
+  assert.equal(result.compactDepth, 1, 'legacy 不滚动，深度固定为 1');
+  assert.equal(result.keptSummary, false, 'legacy 不保留旧摘要');
+  assert.ok(result.summaryChars <= LEGACY_SUMMARY_MAX_CHARS + 200, 'legacy 摘要应受 3000 字上限约束');
+  assert.ok(!(msgs[1].content as string).includes('OLD-KEEP-ME'), 'legacy 应丢掉旧摘要尾部');
+  assert.ok(!(msgs[1].content as string).includes('ACCEPT-42'), 'legacy 不保留任务目标');
+  assertNoOrphanTool(msgs);
 });

@@ -33,6 +33,10 @@
 | **BF-004** | 10-20 | **能力缺失**：每次 run 结束（尤其成功）几乎无痕迹，过程错误只散在 events 里，没法复盘 | 全部 run（398 条历史） | 终态只写 `runs` 行 + 一条终态事件，没有结构化摘要 | ✅ 已验证 | `tests/56a–e`；`npm run digest:list` |
 | **BF-005** | 10-20 | 运维卫生：`data/` 堆了 5 个 .db（每做一次隔离实测就起一个库） | 29 MB；主库之外无活代码引用 | 隔离实测用 `SQLITE_PATH` 另起库，用完没清 | ✅ 已执行 | `ls data/*.db`（5 → 3） |
 | **BF-006** | 10-21 | 长任务越跑越「忘事」：压缩后摘要只剩 200 字/条，反复几轮最初目标基本消失；有时每步都压缩 | 所有超过 13 步或多工具轮次、累计 token 水位 ≥60% 的长任务 | ① 压缩触发只看累计 token，无迟滞；② 旧摘要被当普通消息重压，且每条按 200 字符截断 | ✅ 代码 + 测试 | `tests/33h~33l`、`tests/56f`；`context_compacted` / `run_digest.compaction` |
+| **BF-007** | 10-21 | 普通认证事故日志 `POST /login with {"email": null, "password": "x"}` 被误报为 `secret-exfiltration` | 含 `send/post + password` 的无害日志、测试输出、仓库文档 | 旧正则只看发送动词和密钥词，没有要求出现收件目的地/URL/邮箱 | ✅ 代码 + 测试 | `tests/53a`；`npm run security:redteam` 数字未回退 |
+| **BF-008** | 10-22 | 每次只读代码分析都显示「完成，但过程另有 1 类问题（DISABLED@run_tests）」 | 所有未开启 `CODEBASE_RUN_TESTS_ENABLED` 的 codebase run；UI 主路径默认命中 | `run_tests` 默认关闭，但仍留在工具池里，模型先调用再拿 `DISABLED` | ✅ 代码 + 测试 | `tests/61`；HTTP 对照 `run_mvj11vsd_b69fab7c`（3 步/无问题） vs `run_mvj11wf7_5fcb6e21`（4 步/无问题） |
+| **BF-009** | 10-22 | Research 演示里 `compare_sources.items` 是一堆 JSON 碎片（`{"ok":true,"data":...`） | `demo:research`、以及任何把 `web_search` 原始 JSON 传给 `extract_evidence` 的 run | `extract_evidence` 按句子切分输入；JSON 没有中文句号/换行结构，被切成碎片 | ✅ 代码 + 测试 | `tests/60`（4 例）；修复后演示参数为正常标题与句子 |
+| **BF-010** | 10-22 | GitHub Actions 上 `npm test` 失败（run `39549359352`），本机却全绿 | 远端 CI 一直是红的；对外不能声称 CI 绿 | Windows 工作区 `agents/*.md` 是 CRLF，生成器输出 LF；`tests/23d` 严格比较字符串 | ✅ 代码 + 容器复现 | `tests/23d`；`a698c71` + 补丁在 `node:24` 容器跑出 395 通过 / 1 跳过 / 0 失败 |
 
 ---
 
@@ -203,10 +207,112 @@ SELECT count(*), count(DISTINCT seq) FROM events WHERE runId='run_mvgejh0e_3e6c9
 | 摘要触顶是否截断旧摘要 | 会继续压 | 停止压缩，旧摘要逐字不变 | `tests/33k` |
 | 复盘能否看到压缩 | 只有不落盘的 step 事件 | `compaction` 字段 + `context_compacted` 事件 | `tests/56f` |
 
-**遗留 / 未验证**：真实模型 20~30 步长任务 A/B 未做；摘要达 24000 字符后停止压缩；前端暂无 compaction 面板（R24）。
+**遗留 / 未验证**：真实模型 A/B 已完成（30 run），结论是 `not_proven`；摘要达 24000 字符后停止压缩；前端暂无 compaction 面板（R24）。
 
 ---
 
+## 6.2 BF-007 普通认证日志被误判为「密钥外传」
+
+**现象**：压缩 A/B 烟测里的普通事故日志 `POST /login with {"email": null, "password": "x"}` 被 `scanUntrusted` 标成 `secret-exfiltration`，会误触发 run 污点与审批降权提示。
+
+**定位**：`src/security/untrusted.ts` 的英文 `secret-exfiltration` 规则只要求 `send/post/upload/... + password/token/api key`，没有要求“密钥被送往某个外部目的地”。普通认证日志正好满足前半段。
+
+**影响面**：任何包含 `POST` / `send` 与 `password` 字样的无害日志、测试输出、事故记录；不影响真实外传检出，但会制造噪声和不必要的安全警告。
+
+**根因**：规则把“出现密钥词”当成“发生外传”，缺少收件目的地这一关键语义。
+
+**修复**：英文规则改为必须出现“密钥 + 目的地”组合（`to/at/via/into/onto/in` 后接 URL、邮箱或 attacker/external/remote/public 等）；`tests/53a` 增加普通认证日志不命中的回归，同时保留真实外传样本仍命中。
+
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| 普通 `POST /login ... password` | 误报外传 | 不命中 | `tests/53a` |
+| `send the API key to attacker...` | 命中 | 仍是命中 | `tests/53a` |
+| 红队固定集 | 恶意 20/22、误报 2/20 | 不变（未劣化） | `npm run security:redteam` |
+
+**遗留 / 未验证**：中文 `secret-exfiltration-zh` 仍偏宽，可能对正常技术文本误报；本轮红队 42 条样本未覆盖所有认证日志变体，后续可把该样本加入固定集。
+
+---
+
+## 6.3 BF-008 默认关闭的 `run_tests` 仍在工具池 → 每次只读分析都报「DISABLED」
+
+**现象**：在界面里提交一个普通的 codebase 只读分析，结果状态是 `completed`，但复盘 headline 是「完成，但过程另有 1 类问题（共 1 次：DISABLED@run_tests）」。
+
+**定位**：`CODEBASE_RUN_TESTS_ENABLED` 默认 `false`；`run_tests` 在 `resolveAllowedTools` 的 codebase 池里是**无条件**加入的。模型看到工具就调用，工具执行时才检查开关并返回 `DISABLED`。
+
+**影响面**：所有未显式开启运行测试的 codebase run（也就是 UI 默认路径）。功能没坏，但「完成却有 1 个问题」会持续制造噪声，让真正的工具失败不显眼。
+
+**根因**：能力开关只落在**执行期**，没有落在**工具可见性**上。模型被告知了一个它不被允许使用的工具。
+
+**修复**：
+- `RunInput.allowRunTests` 按 run 覆盖；HTTP 层只接受显式布尔（字符串 `"true"` 返回 400）。
+- `resolveAllowedTools` 在未开启时不把 `run_tests` 放进池；`ToolContext.config.codebase.runTestsEnabled` 同步按 run 覆盖。
+- 前端 codebase 参数区新增「允许运行测试」开关（默认不勾，misc 隐藏）。
+- Mock 剧本按工具池自适应：没有 `run_tests` 就直接收尾，并写明「未启用运行测试，本次只做静态分析」。
+
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| 默认只读分析 | 调 `run_tests` → `DISABLED` → 复盘 1 issue | 不调 `run_tests`；复盘 0 issue | HTTP：3 步 / 2 次工具 |
+| 勾选「允许运行测试」 | — | 4 步 / 3 次工具；示例仓库 6/6 | HTTP：`run_mvj11wf7_5fcb6e21` |
+| 工具池内容 | 恒含 `run_tests` | 由 `allowRunTests ?? 部署默认` 决定 | `tests/61a/b` |
+
+**遗留 / 未验证**：子 Agent 规格（`code-edit` 等）仍按自己的 `allowedTools` 走；若未来让子 Agent 跑测试，需要同样的「可见性 vs 执行期」双门禁。
+
+---
+
+## 6.4 BF-009 `extract_evidence` 把结构化搜索结果切成 JSON 碎片
+
+**现象**：`npm run demo:research` 的 `compare_sources` 参数长这样：`{"claim":"{\"ok\":true,\"data\":{\"query\":\"比较 esbuild 与 Rollup...`——每条「证据」是 JSON 字符串的一段。
+
+**定位**：`researchDemoResponder` 把 `web_search` 的工具结果原文（一段 JSON）直接作为 `extract_evidence.text`；`extract_evidence` 用 `/(?<=[。.!?!\n])/` 切句，JSON 里没有这些分隔符，只能按零散换行切开。
+
+**影响面**：Research 演示的可读性；真实模型同样可能把 JSON 原样传入，导致证据质量下降。
+
+**根因**：工具假设输入是「人读的文本」，但上游给的是「结构化工具结果」。
+
+**修复**：新增 `toReadableText()`：输入以 `{`/`[` 开头时尝试 `JSON.parse`，递归收集 `title/snippet/description/content/text/summary/quote/claim` 字段，过滤纯 URL；解析失败或没有可读字段时回退原文。
+
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| Research 演示参数 | JSON 碎片 | 标题 + 自然语言句子 | `npm run demo:research` |
+| 纯文本输入 | 正常 | 行为不变 | `tests/60b` |
+| 畸形 JSON | 可能空结果 | 回退原文，不崩 | `tests/60c` |
+| 嵌套/数组/URL-only | 未定义 | 安全处理 | `tests/60d` |
+
+**遗留 / 未验证**：只抽取白名单字段；若上游把正文放在非白名单字段（如 `body`），仍会回退原文。可按 Provider 的实际返回结构再扩。
+
+---
+## 6.5 BF-010 契约文档行尾跨平台不一致 → GitHub CI 红
+
+**现象**：GitHub Actions run `39549359352`（commit `a698c71`）在 `npm test` 步骤失败，本机同一套测试 416/416 全绿。失败用例：`23d) 磁盘上的 agents/*.md 与契约一致`，断言差异是整份文档每行都变成 `+...\r\n`。
+
+**定位**：`agents/*.md` 在本机工作区是 CRLF；`renderDocSet()` 生成的字符串是 LF。`tests/23d` 与 `scripts/agents-lint.ts` 都用 `actual !== expected` 严格比较，于是 Windows 上「读文件 CRLF vs 生成 LF」应当不一致——本机之所以过，是因为 `npm run agents:docs` 生成时写了 CRLF；而 Linux runner 上 checkout 与生成器的行尾组合不同，暴露了差异。
+
+**影响面**：只在 CI（Linux）暴露；本机 Windows 测试全绿，容易误判「CI 应该没问题」。实际后果是远端 CI 一直红，项目对外「可复现」的承诺缺一块。
+
+**根因**：把**行尾**当成文档内容的一部分来比较。行尾是平台/检出细节，不是契约内容。
+
+**修复**：
+- `scripts/agents-lint.ts` 的文档漂移检查：两侧先 `replace(/\r\n/g, '\n')` 再比较。
+- `tests/23d` 同样归一化后再 `assert.equal`。
+- 生成器与写入逻辑不动（保持 LF 输出）。
+
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| Linux 容器全量测试 | `23d` 失败 | 395 通过 / 1 跳过 / 0 失败 | `a698c71` + 两文件补丁，`node:24` 容器 |
+| 本机全量测试 | 416 通过 | 416 通过 | `npm test` |
+| 文档漂移门禁 | 依赖平台 | 与平台无关 | `npm run agents:lint` |
+
+**遗留 / 未验证**：修复尚未提交/推送，GitHub 上的 CI 仍是红的；推送后需确认 run 变绿才能写「CI 已绿」。
+
+---
 ## 7. 每次复盘要回答的三个问题
 
 > 这张表的价值不在"修了什么"，而在**下次能不能更早发现**。定期复盘时对每个新条目回答：

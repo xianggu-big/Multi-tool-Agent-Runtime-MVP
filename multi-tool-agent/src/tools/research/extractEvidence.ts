@@ -21,6 +21,49 @@ function keywords(q: string): string[] {
     .filter((w) => w.length > 1 && !STOP.has(w.toLowerCase()));
 }
 
+const TEXT_KEYS = new Set(['title', 'snippet', 'description', 'content', 'text', 'summary', 'quote', 'claim']);
+
+/** 递归收集 JSON 里的可读文本（搜索/抓取结果常被模型原样塞进 text）。 */
+function collectReadable(node: unknown, out: string[], depth = 0): void {
+  if (depth > 6 || out.length > 400) return;
+  if (typeof node === 'string') {
+    const s = node.trim();
+    if (s.length > 4 && !/^https?:\/\//i.test(s)) out.push(s);
+    return;
+  }
+  if (Array.isArray(node)) {
+    for (const item of node) collectReadable(item, out, depth + 1);
+    return;
+  }
+  if (node && typeof node === 'object') {
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (typeof value === 'string') {
+        if (TEXT_KEYS.has(key)) collectReadable(value, out, depth + 1);
+      } else {
+        collectReadable(value, out, depth + 1);
+      }
+    }
+  }
+}
+
+/**
+ * 把「结构化工具结果」转成可读文本。
+ * 模型经常把 web_search / fetch_page 的 JSON 原样传给 extract_evidence；
+ * 直接按句子切会把 JSON 切成碎片，这里先抽出 title/snippet 等字段。
+ */
+export function toReadableText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return raw;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    const out: string[] = [];
+    collectReadable(parsed, out);
+    return out.length > 0 ? out.join('\n') : raw;
+  } catch {
+    return raw;
+  }
+}
+
 export const extractEvidence: Tool = {
   name: 'extract_evidence',
   description: '从已获取资料中提取与研究问题相关的证据，保留来源 URL 与原文定位；不得凭空生成来源或引用。',
@@ -32,7 +75,8 @@ export const extractEvidence: Tool = {
     const started = Date.now();
     const args = input as z.infer<typeof inputSchema>;
     const kws = keywords(args.question);
-    const sentences = args.text
+    const sourceText = toReadableText(args.text);
+    const sentences = sourceText
       .split(/(?<=[。.!?!\n])\s*|\n+/)
       .map((s) => s.trim())
       .filter((s) => s.length > 4);

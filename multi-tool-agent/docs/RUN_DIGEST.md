@@ -3,7 +3,7 @@
 > **一句话**：**每一次** run 结束（成功、失败、触顶、取消、等待用户、进程被杀）都会自动落一份结构化摘要，  
 > 记下「结论 + 过程中出过哪些错 + 第一个错在哪」。不再需要事后手工翻 events。
 >
-> 入口：`npm run digest:list` ｜ `GET /api/digests` ｜ `GET /api/runs/:id/digest` ｜ `data/run-digest.jsonl`
+> 入口：`npm run digest:list` ｜ `GET /api/digests` ｜ `GET /api/runs/:id/digest` ｜ `data/run-digest.jsonl` ｜ 前端「复盘」页签
 
 ---
 
@@ -112,6 +112,8 @@ npm run digest:list -- --json            # 给脚本用
 curl -s "localhost:3939/api/digests?onlyProblems=1&limit=20" | jq '.digests[] | {runId, status, issueCount, headline}'
 curl -s "localhost:3939/api/runs/<runId>/digest" | jq '.issues'
 ```
+
+**前端「复盘」页签（R24）**：打开工作台 → 复盘，可按「只看有问题的 / 全部」、状态、任务类型、最近条数筛选；左侧选 run，右侧看结论、首个问题、步骤/模型/工具/tokens/成本、过程问题表、原始 JSON。若 `compaction` 存在，会单独显示压缩次数、移除消息、最大深度、摘要字符数、最大水位、水位来源、prompt tokens / 窗口、是否触顶；没有压缩则明确显示「本 run 未触发」，不能解释成“压缩不可用”。实时流也会为 `context_compacted` 生成一张卡片。
 
 
 

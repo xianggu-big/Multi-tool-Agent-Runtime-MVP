@@ -75,7 +75,9 @@ export const INJECTION_PATTERNS: ReadonlyArray<{ id: string; re: RegExp }> = [
   },
   {
     id: 'secret-exfiltration',
-    re: /(?:send|post|upload|exfiltrate|reveal)\s+.{0,48}(?:api[_\s-]?key|secret|token|password|\.env)/i,
+    // 只命中「把密钥送往外部」的组合；不能把普通事故日志里的 `POST /login ... password`
+    // 当成外传（2026-10-21 压缩 A/B 实测误报）。因此要求 secret 之后出现收件目的地。
+    re: /(?:send|post|upload|exfiltrate|reveal|leak)\s+(?:the\s+)?[\w.'"`\-\s]{0,48}?(?:api[_\s-]?key|secret|token|password|\.env)\b[\s\S]{0,80}?(?:to|at|via|into|onto|in)\s+(?:https?:\/\/|[\w.+-]+@|(?:the\s+)?(?:attacker|external|remote|public|my|our|me|us)\b)/i,
   },
   {
     id: 'secret-exfiltration-zh',

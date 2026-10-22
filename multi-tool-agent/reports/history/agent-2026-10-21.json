@@ -1,33 +1,33 @@
 {
   "date": "2026-10-21",
-  "generatedAt": "2026-10-21T04:29:00.047Z",
+  "generatedAt": "2026-10-21T06:15:44.828Z",
   "totals": {
-    "n": 401,
-    "ok": 381,
+    "n": 403,
+    "ok": 382,
     "awaiting": 0,
-    "successRate": 0.9501246882793017,
-    "avgSteps": 3.9376558603491274,
-    "avgMs": 7045.2319201995015,
-    "p95Ms": 19535,
-    "tokens": 2141819,
-    "cachedTokens": 1082240,
-    "cost": 0.6034247815999999,
-    "toolCalls": 1345,
-    "modelCalls": 1579
+    "successRate": 0.9478908188585607,
+    "avgSteps": 3.9528535980148884,
+    "avgMs": 7114.771712158809,
+    "p95Ms": 21190,
+    "tokens": 2275901,
+    "cachedTokens": 1183104,
+    "cost": 0.6095652208,
+    "toolCalls": 1370,
+    "modelCalls": 1593
   },
   "real": {
-    "n": 60,
-    "ok": 41,
+    "n": 62,
+    "ok": 42,
     "awaiting": 0,
-    "successRate": 0.6833333333333333,
-    "avgSteps": 4.083333333333333,
-    "avgMs": 45202.3,
-    "p95Ms": 197815,
-    "tokens": 2006750,
-    "cachedTokens": 1082240,
-    "cost": 0.6034247815999999,
-    "toolCalls": 348,
-    "modelCalls": 245
+    "successRate": 0.6774193548387096,
+    "avgSteps": 4.17741935483871,
+    "avgMs": 44423.43548387097,
+    "p95Ms": 159631,
+    "tokens": 2140832,
+    "cachedTokens": 1183104,
+    "cost": 0.6095652208,
+    "toolCalls": 373,
+    "modelCalls": 259
   },
   "byType": [
     {
@@ -46,10 +46,10 @@
     },
     {
       "type": "misc",
-      "n": 13,
-      "ok": 12,
-      "avgMs": 13516.846153846154,
-      "cost": 0.017040324
+      "n": 15,
+      "ok": 13,
+      "avgMs": 14522.266666666666,
+      "cost": 0.023180763200000003
     },
     {
       "type": "orchestrator",

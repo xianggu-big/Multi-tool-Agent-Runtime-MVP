@@ -29,6 +29,7 @@
     "rag:bench": "node --import tsx scripts/rag-bench.ts",
     "rag:ablation": "node --import tsx scripts/rag-ablation.ts",
     "eval:edit": "node --import tsx scripts/edit-eval.ts",
+    "eval:compaction": "node --import tsx scripts/compaction-ab.ts",
     "security:redteam": "node --import tsx scripts/injection-redteam.ts",
     "report:refresh": "node --import tsx scripts/gen-params-report.ts && node --import tsx scripts/gen-agent-docs.ts && node --import tsx scripts/gen-agent-report.ts"
   },
