@@ -14,7 +14,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          # Node 24.21.0 在进程退出时会让 better-sqlite3 11.10.0 触发
+          # RemoveEnvironmentCleanupHook 原生断言（7 个测试文件被误判失败）。
+          # 24.22.0 已在 Linux 容器完整跑通 421 passed / 1 Docker skip。
+          node-version: '24.22.0'
           cache: npm
           cache-dependency-path: multi-tool-agent/package-lock.json
       - run: npm ci
