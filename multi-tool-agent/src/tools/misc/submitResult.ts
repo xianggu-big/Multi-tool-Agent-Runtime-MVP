@@ -11,29 +11,31 @@ import type { Tool, ToolContext } from '../types.js';
 import type { ToolResult } from '../../types.js';
 import { okResult, errResult } from '../types.js';
 
+const itemObject = z.object({
+  label: z.string().min(1).max(200).describe('条目名，例如「文件总数」'),
+  value: z.union([z.string().max(500), z.number()]).describe('条目值'),
+  detail: z.string().max(1000).optional().describe('补充说明（可选）'),
+});
+
+const findingObject = z.object({
+  path: z.string().max(500).optional().describe('相关路径（没有明确路径可省略）'),
+  note: z.string().max(1000).describe('说明'),
+});
+
 const inputSchema = z.object({
   summary: z.string().min(1).max(2000).describe('一句话结论（必填）'),
   items: z
-    .array(
-      z.object({
-        label: z.string().min(1).max(200).describe('条目名，例如「文件总数」'),
-        value: z.union([z.string().max(500), z.number()]).describe('条目值'),
-        detail: z.string().max(1000).optional().describe('补充说明（可选）'),
-      }),
-    )
+    // 真实模型（DeepSeek，2026-10-23 实测）会先把条目写成字符串数组；
+    // 直接 INVALID_ARGS 会白烧 1~2 轮 tool call，这里接受简写并在 execute 里归一化。
+    .array(z.union([itemObject, z.string().min(1).max(700)]))
     .max(50)
     .optional()
-    .describe('结构化清单（可选）'),
+    .describe('结构化清单（可选）；也可用字符串简写，如 "文件总数：5"'),
   findings: z
-    .array(
-      z.object({
-        path: z.string().max(500).describe('相关路径'),
-        note: z.string().max(1000).describe('说明'),
-      }),
-    )
+    .array(z.union([findingObject, z.string().min(1).max(1000)]))
     .max(50)
     .optional()
-    .describe('逐条发现（可选）'),
+    .describe('逐条发现（可选）；字符串会转成 { note }，没有路径就不编造路径'),
   escalateTo: z
     .enum(['codebase', 'research', 'human'])
     .optional()
@@ -52,6 +54,23 @@ const inputSchema = z.object({
 });
 
 export type SubmitResultInput = z.infer<typeof inputSchema>;
+
+/** 字符串简写 → 结构化条目：按第一个全角/半角冒号拆 label/value；拆不出就整句当 label。 */
+function normalizeItem(entry: SubmitResultInput['items'] extends (infer I)[] | undefined ? I : never) {
+  if (typeof entry !== 'string') return entry;
+  const text = entry.trim();
+  const idx = text.search(/[：:]/);
+  if (idx > 0) {
+    const label = text.slice(0, idx).trim().slice(0, 200);
+    const value = text.slice(idx + 1).trim().slice(0, 500);
+    if (label) return { label, value };
+  }
+  return { label: text.slice(0, 200), value: '' };
+}
+
+function normalizeFinding(entry: NonNullable<SubmitResultInput['findings']>[number]) {
+  return typeof entry === 'string' ? { note: entry.slice(0, 1000) } : entry;
+}
 
 export const submitResult: Tool = {
   name: 'submit_result',
@@ -74,6 +93,14 @@ export const submitResult: Tool = {
         Date.now() - started,
       );
     }
-    return okResult({ submitted: true, ...parsed }, Date.now() - started);
+    return okResult(
+      {
+        submitted: true,
+        ...parsed,
+        ...(parsed.items ? { items: parsed.items.map(normalizeItem) } : {}),
+        ...(parsed.findings ? { findings: parsed.findings.map(normalizeFinding) } : {}),
+      },
+      Date.now() - started,
+    );
   },
 };

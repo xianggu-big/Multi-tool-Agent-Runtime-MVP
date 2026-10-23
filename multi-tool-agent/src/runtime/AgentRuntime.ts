@@ -612,14 +612,18 @@ export class AgentRuntime {
     const risk = assessApprovalRisk({
       ops: req.files.map((f) => f.op),
       hasCommands: req.hasCommands,
+      mcpDestructive: req.riskReasons?.includes('mcp-destructive'),
     });
+    // 调用方可能带着自己的风险原因（如 MCP destructiveHint）：合并而不是覆盖，
+    // 否则“未来接入的其他工具”会被这里静默降级成普通审批。
+    const reasons = [...new Set([...risk.reasons, ...(req.riskReasons ?? [])])];
     // 所有调用方都在这里统一补齐风险元数据：写工具、子 Agent 或未来接入的其他工具
     // 都不能因为漏设字段而绕过“当前批次二次确认”。
     req = {
       ...req,
-      highRisk: risk.highRisk || undefined,
-      riskReasons: risk.reasons.length ? risk.reasons : undefined,
-      requiresExplicitConfirmation: risk.highRisk || undefined,
+      highRisk: reasons.length > 0 || undefined,
+      riskReasons: reasons.length ? reasons : undefined,
+      requiresExplicitConfirmation: reasons.length > 0 || undefined,
     };
     const sticky = this.stickyFiles.get(runId) ?? new Set<string>();
     const sensitiveFiles = req.files.filter((f) => isSensitive((f.relPath.split('/').pop() ?? f.relPath).toLowerCase()));
@@ -920,6 +924,8 @@ export class AgentRuntime {
         llmProvider: input.llm?.provider,
         llmModel: input.llm?.model,
         llmParams: input.llm?.params,
+        // 编排预筛（零 token 估算）：解释“为什么建议/不建议编排”
+        ...(input.orchestration?.gate ? { orchestrationGate: input.orchestration.gate } : {}),
       },
       extra: { allowedTools, limits: this.resolveLimits(input) },
     });
@@ -1881,7 +1887,9 @@ export class AgentRuntime {
           signal: spawnOpts?.signal ? AbortSignal.any([ctx.signal, spawnOpts.signal]) : ctx.signal,
           streamDeltas: ctx.streamDeltas,
           sandbox,
-          requestApproval: hasWrite ? (r) => this.requestApproval(runId, r) : undefined,
+          // 审批通道与 hasWrite 解耦：MCP destructiveHint=true 的工具也需要人工闸门；
+          // 不需要审批的工具压根不会调用它，注入本身不扩大权限。
+          requestApproval: (r) => this.requestApproval(runId, r),
           emitEvent: (type, data) => this.tracer.emit(runId, type, data),
           sandboxBrief: hasWrite ? (sandbox?.briefFor() ?? null) : null,
           onBudget: this.budgetHook(runId),
@@ -2195,6 +2203,16 @@ function buildOrchestratorSystemPrompt(input: RunInput, opts: { writeSpecsAllowe
   );
 
   const suggestions = input.orchestration?.suggestedSubtasks ?? [];
+  const gate = input.orchestration?.gate;
+  const gateNote =
+    gate?.recommend === 'single' && (input.orchestration?.allowSelfTools ?? false)
+      ? [
+          '',
+          '【单上下文预筛（重要）】',
+          `  ${gate.reason}。`,
+          '  优先用你自己的只读工具完成核对并 submit_orchestration；只有确需分区覆盖或交叉验证时才派发子任务。',
+        ]
+      : [];
 
   return [
     '你是「编排主 Agent」，负责把用户目标拆成若干**相互独立**的子任务，派发给专职子 Agent 并行执行，最后汇总并核验。',
@@ -2210,6 +2228,7 @@ function buildOrchestratorSystemPrompt(input: RunInput, opts: { writeSpecsAllowe
     '4. 每个子任务必须写清四要素：specId（用哪个子 Agent）、objective（一句话、可验证的目标）、',
     '   inputs（具体输入引用，如 { dir: "src/tools" } —— 不要写"整个仓库"这种大而空的范围）、',
     '   boundary（本次额外边界）与 expectedOutput（期望输出）。**目标含糊是子 Agent 跑偏的第一原因。**',
+    ...gateNote,
     suggestions.length
       ? [
           '',

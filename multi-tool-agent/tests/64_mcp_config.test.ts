@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import net from 'node:net';
 import { mcpToolPrefix, parseMcpServers, redactMcpUrl } from '../src/mcp/config.js';
 import { McpClientRuntime } from '../src/mcp/bootstrap.js';
 import { toolPoolFor } from '../src/runtime/toolPool.js';
@@ -208,6 +209,91 @@ test('64h) POST /api/runs 的 miscLimits 回显与执行期共用工具池（含
     assert.ok(body.miscLimits.allowedTools.includes('mcp_hub_date'));
     assert.ok(body.miscLimits.allowedTools.includes('submit_result'));
     await fetch(`${base}/api/runs/${body.runId}/cancel`, { method: 'POST' });
+  } finally {
+    await new Promise<void>((resolveClose) => http.close(() => resolveClose()));
+  }
+});
+
+/** 取一个当前空闲的端口（只 listen/close，不建连接；用于“先失败、后恢复”的重连场景）。 */
+async function freePort(): Promise<number> {
+  return new Promise((resolvePort, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolvePort(port));
+    });
+  });
+}
+
+test('64i) 手动重连：error → ready 可恢复，重连不产生同名工具冲突', { timeout: 30_000 }, async () => {
+  const { createApp } = await import('../src/server.js');
+  const config = tmpConfig();
+  const { app } = createApp(config);
+  const port = await freePort();
+  const registry = new ToolRegistry();
+  const errors = new ErrorReporter({ console: false });
+  const runtime = new McpClientRuntime(
+    [{ name: 'hub', url: `http://127.0.0.1:${port}/mcp`, names: ['knowledge_stats'], timeoutMs: 1000 }],
+    registry,
+    errors,
+  );
+  let http: import('node:http').Server | null = null;
+  try {
+    // 先连一个没人监听的端口：失败但进程不崩，状态如实标 error。
+    await runtime.start();
+    assert.equal(runtime.status().servers[0].state, 'error');
+    assert.equal(runtime.status().toolCount, 0);
+
+    // 服务起来后重连 → 恢复 ready（不需要重启本进程）
+    http = app.listen(port);
+    await new Promise<void>((r) => http!.once('listening', () => r()));
+    const recovered = await runtime.reconnect('hub');
+    assert.equal(recovered.servers[0].state, 'ready');
+    assert.deepEqual(recovered.tools, ['mcp_hub_knowledge_stats']);
+    assert.equal(registry.has('mcp_hub_knowledge_stats'), true);
+
+    // 再次重连（正常状态）：先摘工具再注册，不能抛「工具已注册」
+    const again = await runtime.reconnect('hub');
+    assert.equal(again.tools.length, 1);
+    assert.equal(again.servers[0].state, 'ready');
+    const call = await registry.execute('mcp_hub_knowledge_stats', {}, makeCtx({ allowedPermissions: ['mcp:call'] }));
+    assert.equal(call.result.ok, true, '重连后的工具仍可执行');
+
+    // 未知 server：显式报错（HTTP 层转 404），不能静默返回成功
+    await assert.rejects(() => runtime.reconnect('nope'), /未配置 MCP server/);
+  } finally {
+    await runtime.close();
+    if (http) await new Promise<void>((r) => http!.close(() => r()));
+  }
+});
+
+test('64j) POST /api/mcp/reconnect：参数校验 + 未知 server 404', { timeout: 30_000 }, async () => {
+  const { createApp } = await import('../src/server.js');
+  const config = tmpConfig();
+  const { app } = createApp(config);
+  const { http, base } = await listen(app);
+  try {
+    const bad = await fetch(`${base}/api/mcp/reconnect`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 123 }),
+    });
+    assert.equal(bad.status, 400);
+
+    const unknown = await fetch(`${base}/api/mcp/reconnect`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'nope' }),
+    });
+    assert.equal(unknown.status, 404);
+
+    // 未配置任何 server：全部重连是合法的 no-op
+    const all = await fetch(`${base}/api/mcp/reconnect`, { method: 'POST' });
+    assert.equal(all.status, 200);
+    const body = (await all.json()) as { configured: number; toolCount: number };
+    assert.equal(body.configured, 0);
+    assert.equal(body.toolCount, 0);
   } finally {
     await new Promise<void>((resolveClose) => http.close(() => resolveClose()));
   }

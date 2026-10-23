@@ -316,3 +316,40 @@ test('56f) 复盘摘要带上下文压缩观测（R23）：次数 / 深度 / 移
 
   store.close();
 });
+
+test('56g) 读文件台账：同一 run 重复 read_file 可在摘要中核对（T2）', async () => {
+  const dir = tmpDir();
+  const config = cfgFor(dir);
+  const { runtime, store, logger } = buildRuntime(config, config.sqlitePath);
+
+  const responder: MockResponder = ({ callIndex }) => {
+    if (callIndex < 3) {
+      // 同一路径读三次（真实编排里常由不同子任务各读一遍）
+      return {
+        stopReason: 'tool_use',
+        content: '',
+        toolCalls: [{ id: `r${callIndex}`, name: 'read_file', arguments: { path: 'src/calc.js' } }],
+      };
+    }
+    return { stopReason: 'end_turn', content: '完成' };
+  };
+
+  const input: RunInput = { runType: 'codebase', goal: '重复读同一个文件', repoPath: WORKSPACE };
+  const runId = runtime.createRun(input, mockProvider(responder));
+  const result = await runtime.run(input, runId);
+  logger.flush();
+
+  assert.equal(result.status, 'completed');
+  const digest = store.getRunDigest(runId);
+  assert.ok(digest);
+  assert.ok(digest!.readStats, '有 read_file 时摘要必须带 readStats');
+  assert.equal(digest!.readStats!.total, 3);
+  assert.equal(digest!.readStats!.uniquePaths, 1);
+  assert.equal(digest!.readStats!.duplicateCalls, 2, '重复次数 = 总次数 - 去重路径数');
+  assert.deepEqual(digest!.readStats!.repeatedPaths, [{ path: 'src/calc.js', count: 3 }]);
+
+  const line = readDigestLines(join(dir, 'run-digest.jsonl')).find((l) => l.runId === runId);
+  assert.ok(line?.readStats, 'JSONL 落点也应带 readStats（报告可复核）');
+
+  store.close();
+});

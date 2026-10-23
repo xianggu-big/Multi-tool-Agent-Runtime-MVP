@@ -261,7 +261,7 @@ export type TraceEventType =
 export type ApprovalDecisionValue = 'allow_once' | 'allow_file' | 'deny';
 
 /** 高危审批原因（机器可读；前端负责本地化文案） */
-export type ApprovalRiskReason = 'delete' | 'host-command';
+export type ApprovalRiskReason = 'delete' | 'host-command' | 'mcp-destructive';
 
 /**
  * 审批请求里的一项文件改动。
@@ -487,6 +487,8 @@ export interface RunInput extends RunLimits {
     strictVerify?: boolean;
     /** 规则式预筛出来的建议子任务（非强制，主 Agent 可增删改） */
     suggestedSubtasks?: SubtaskRequest[];
+    /** 服务端零 token 预筛：单上下文是否装得下（显式编排时只作提示，不改变选择） */
+    gate?: OrchestrationGate;
   };
   /** Mock 模式下的演示剧本名 */
   mockScenario?: string;
@@ -518,6 +520,22 @@ export interface SubtaskRequest {
   inputs?: Record<string, string>;
   /** 期望输出要点（可选，帮助子 Agent 对齐格式） */
   expectedOutput?: string;
+}
+
+/**
+ * 编排预筛建议（零 token 估算，不是强制）。
+ * `single` 表示“一个上下文预计装得下，优先单 Agent”；`unknown` 表示缺少信息。
+ */
+export interface OrchestrationGate {
+  recommend: 'single' | 'orchestrate' | 'unknown';
+  reason: string;
+  estimatedTokens?: number;
+  /** 预计占用 / token 预算（0~1+） */
+  budgetShare?: number;
+  files?: number;
+  bytes?: number;
+  /** 扫描达到上限，数字只是下界 */
+  truncated?: boolean;
 }
 
 /** 子 Agent 的执行结果（回传给主 Agent 的「简要」形态，受长度上限约束） */
@@ -596,8 +614,8 @@ export interface MiscReport {
   summary: string;
   /** 结构化清单（例如「文件数: 42」「最大文件: a.log (2.1MB)」） */
   items?: { label: string; value: string | number; detail?: string }[];
-  /** 逐条发现（通常带路径） */
-  findings?: { path: string; note: string }[];
+  /** 逐条发现（通常带路径；字符串简写归一化后可能没有 path） */
+  findings?: { path?: string; note: string }[];
   /** 超出能力范围时的改派建议 */
   escalateTo?: 'codebase' | 'research' | 'human';
   escalateReason?: string;

@@ -336,3 +336,90 @@ test('44f) HttpTransport：SSE 增量解析（首帧先到）+ 自动回传 Mcp-
   assert.equal(call, 2);
   assert.equal(initSeen[1]['mcp-session-id'], 'sess-1', '后续请求必须带上会话 id');
 });
+
+test('44h) destructiveHint=true 默认走人工审批：无通道拒绝 / 拒绝不执行 / 批准才执行', async () => {
+  const server = new McpServer({ name: 'approval-mcp', version: '0.0.1' });
+  const schema = { type: 'object', properties: {}, additionalProperties: false };
+  let executed = 0;
+  server.registerTool({
+    name: 'destroy',
+    description: '有外部副作用',
+    inputSchema: schema,
+    annotations: { destructiveHint: true },
+    handler: () => {
+      executed += 1;
+      return { destroyed: true };
+    },
+  });
+  server.registerTool({
+    name: 'read',
+    description: '只读',
+    inputSchema: schema,
+    annotations: { readOnlyHint: true },
+    handler: () => ({ read: true }),
+  });
+
+  const [clientT, serverT] = createInMemoryTransportPair();
+  serverT.onMessage(async (msg) => {
+    const out = Array.isArray(msg) ? await server.handleBatch(msg) : await server.handle(msg);
+    if (out !== null) await serverT.send(out);
+  });
+  const client = new McpClient(clientT, { timeoutMs: 5000 });
+  try {
+    await client.connect();
+    const registry = new ToolRegistry();
+    await registerMcpTools(registry, client, { permission: 'mcp:call' });
+
+    // ① 没有审批通道：fail-closed，绝不能悄悄执行
+    const noChannel = await registry.execute('mcp_destroy', {}, makeCtx({ allowedPermissions: ['mcp:call'] }));
+    assert.equal(noChannel.result.ok, false);
+    assert.equal(noChannel.result.error?.code, 'MCP_APPROVAL_REQUIRED');
+    assert.equal(executed, 0);
+
+    // ② 有通道但被拒绝：同样不执行，错误可回喂模型
+    const denied = await registry.execute(
+      'mcp_destroy',
+      {},
+      makeCtx({
+        allowedPermissions: ['mcp:call'],
+        requestApproval: async (req) => {
+          assert.equal(req.toolName, 'mcp_destroy');
+          assert.deepEqual(req.riskReasons, ['mcp-destructive']);
+          assert.equal(req.highRisk, undefined, 'highRisk 由 Runtime 统一补齐（工具侧只声明原因）');
+          return { approvalId: req.approvalId, value: 'deny', reason: '测试拒绝', decidedAt: new Date().toISOString() };
+        },
+      }),
+    );
+    assert.equal(denied.result.ok, false);
+    assert.equal(denied.result.error?.code, 'MCP_APPROVAL_DENIED');
+    assert.match(denied.result.error?.message ?? '', /测试拒绝/);
+    assert.equal(executed, 0, '拒绝后不得产生副作用');
+
+    // ③ 批准后正常执行
+    const allowed = await registry.execute(
+      'mcp_destroy',
+      {},
+      makeCtx({
+        allowedPermissions: ['mcp:call'],
+        requestApproval: async (req) => ({ approvalId: req.approvalId, value: 'allow_once', decidedAt: new Date().toISOString() }),
+      }),
+    );
+    assert.equal(allowed.result.ok, true);
+    assert.equal(executed, 1);
+
+    // ④ 只读工具不受影响（不会多弹一张卡）
+    const read = await registry.execute(
+      'mcp_read',
+      {},
+      makeCtx({
+        allowedPermissions: ['mcp:call'],
+        requestApproval: async () => {
+          throw new Error('只读工具不应请求审批');
+        },
+      }),
+    );
+    assert.equal(read.result.ok, true);
+  } finally {
+    await client.close();
+  }
+});

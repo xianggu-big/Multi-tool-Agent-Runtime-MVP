@@ -42,8 +42,33 @@ const subtaskSchema = z.object({
 });
 
 const inputSchema = z.object({
-  subtasks: z.array(subtaskSchema).min(1).max(8).describe('要并行派发的子任务列表（彼此必须相互独立、无依赖）'),
+  // 真实模型（2026-10-23 实测）会把数组序列化成 JSON 字符串传进来；直接 INVALID_ARGS
+  // 会白烧一轮工具调用。这里接受字符串，由 execute 解析并做同一份 schema 校验。
+  subtasks: z
+    .union([z.array(subtaskSchema).min(1).max(8), z.string().min(2).max(20000)])
+    .describe('要并行派发的子任务数组（优先用数组；JSON 数组字符串也可，彼此必须独立、无依赖）'),
 });
+
+type SubtaskSpec = z.infer<typeof subtaskSchema>;
+
+/** 数组或 JSON 字符串 → 已校验的子任务列表；错误信息直接可回喂模型。 */
+export function normalizeSubtasks(value: unknown): { items: SubtaskSpec[] } | { error: string } {
+  if (Array.isArray(value)) return { items: value as SubtaskSpec[] };
+  if (typeof value !== 'string') return { error: 'subtasks 必须是数组（或 JSON 数组字符串）' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return { error: 'subtasks 是字符串但不是合法 JSON；请直接传数组（不要加引号）' };
+  }
+  const checked = z.array(subtaskSchema).min(1).max(8).safeParse(parsed);
+  if (!checked.success) {
+    return {
+      error: `subtasks 字符串解析后不符合契约：${checked.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
+    };
+  }
+  return { items: checked.data };
+}
 
 /** 单个子任务结果的字符上限（上下文纪律：主 Agent 只看到简报，不看到全文） */
 function brief(o: SubtaskOutcome, maxChars: number): SubtaskOutcome {
@@ -115,7 +140,10 @@ export const delegateSubtasks: Tool = {
   riskLevel: 'low',
   async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
     const started = Date.now();
-    const args = input as z.infer<typeof inputSchema>;
+    const parsed = input as z.infer<typeof inputSchema>;
+    const normalized = normalizeSubtasks(parsed.subtasks);
+    if ('error' in normalized) return errResult('INVALID_ARGS', normalized.error, Date.now() - started);
+    const args = { ...parsed, subtasks: normalized.items };
     const cfg = ctx.config.subagent;
 
     // 守卫 ①：能力是否注入（只有主 Agent 有）

@@ -14,6 +14,7 @@
 
 import type { TraceEvent } from '../types.js';
 import { aggregateRunEvents } from '../report/runReport.js';
+import { extractReadStats, type ReadStats } from './readStats.js';
 
 export const RUN_DIGEST_VERSION = 1;
 
@@ -107,6 +108,11 @@ export interface RunDigest {
     /** 最近一次观察到的模型上下文窗口 */
     contextWindow?: number;
   };
+  /**
+   * 读文件台账（T2）：只统计 `read_file` 的调用次数与重复路径，**不声称省了 token**。
+   * 没有读文件时省略该字段（历史 run 也没有）。
+   */
+  readStats?: ReadStats;
   /** 过程问题（按 code + 位置聚合，按出现顺序） */
   issues: RunDigestIssue[];
   /** 最早出现的问题 —— "一个流程都跑不完"时第一个该看的东西 */
@@ -364,6 +370,7 @@ export function buildRunDigest(
   const { issues: raw, counts } = collectRunIssues(events);
   const issues = groupIssues(raw);
   const compaction = summarizeCompaction(events);
+  const readStats = extractReadStats(events);
 
   return {
     version: RUN_DIGEST_VERSION,
@@ -388,6 +395,7 @@ export function buildRunDigest(
     eventStats: { total: events.length, byType },
     counts,
     ...(compaction ? { compaction } : {}),
+    ...(readStats.total > 0 ? { readStats } : {}),
     issues,
     ...(issues.length
       ? {

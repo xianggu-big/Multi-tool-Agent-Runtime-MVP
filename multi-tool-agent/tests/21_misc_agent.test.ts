@@ -315,6 +315,31 @@ test('21j2) submit_result：schema 与业务校验（缺 summary / 非法 escala
   assert.equal((okRes.data as any).submitted, true);
 });
 
+test('21j3) submit_result 接受字符串简写：items 拆 label/value，findings 不编造路径', async () => {
+  const ctx = makeCtx({ allowedPermissions: ['misc:read', 'misc:report'] });
+  const reg = buildRegistry();
+  const res = await reg.execute(
+    'submit_result',
+    {
+      summary: '知识库为空',
+      items: ['文档数：0', 'chunk 数: 0', '仅一句没有冒号的条目'],
+      findings: ['统计来自 MCP 工具实时返回', '没有需要人工处理的异常'],
+    },
+    ctx,
+  );
+  assert.equal(res.result.ok, true, res.result.error?.message);
+  const data = res.result.data as any;
+  assert.deepEqual(data.items, [
+    { label: '文档数', value: '0' },
+    { label: 'chunk 数', value: '0' },
+    { label: '仅一句没有冒号的条目', value: '' },
+  ]);
+  assert.deepEqual(data.findings, [
+    { note: '统计来自 MCP 工具实时返回' },
+    { note: '没有需要人工处理的异常' },
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // 6. 服务端：校验 + HTTP 端到端 + 分流接口
 // ---------------------------------------------------------------------------

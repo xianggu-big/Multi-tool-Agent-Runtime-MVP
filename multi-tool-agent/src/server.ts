@@ -9,7 +9,7 @@ import { recordToResult } from './store/SqliteStore.js';
 import { buildTraceSnapshot } from './trace/Tracer.js';
 import { buildRunReport, toReportRun } from './report/runReport.js';
 import { listRunReportMetas } from './report/runReportFiles.js';
-import type { RunInput, RunType, TraceEvent, TraceEventType, LLMGenerationParams, ApprovalDecisionValue, ToolChoice } from './types.js';
+import type { RunInput, RunType, TraceEvent, TraceEventType, LLMGenerationParams, ApprovalDecisionValue, ToolChoice, OrchestrationGate } from './types.js';
 import { LLM_PRESETS, PARAM_META, getPreset } from './llm/presets.js';
 import { testLlmConnection, normalizeBaseUrl } from './llm/testConnection.js';
 import { createProvider } from './llm/index.js';
@@ -18,6 +18,8 @@ import { preSplitSubtasks, pickTopLevelDirs, extractTopics } from './runtime/pre
 import { SUB_AGENT_SPECS, listSpecIds, validateSpecs } from './agents/specs.js';
 import { TOOL_PERMISSION } from './runtime/AgentRuntime.js';
 import { toolPoolFor } from './runtime/toolPool.js';
+import { adviseOrchestration, scanRepoFacts } from './runtime/orchestrationGate.js';
+import { aggregateSubtaskStats } from './runtime/subtaskStats.js';
 import { getEnv } from './env.js';
 import { clampNumber, parseGenerationParams } from './llm/params.js';
 import { diagnoseRun } from './observability/latency.js';
@@ -221,6 +223,12 @@ export function validateRunRequest(body: Record<string, unknown>, config: Runtim
       maxWidth: Math.min(maxWidthRaw ?? config.subagent.maxWidth, config.subagent.maxWidth),
     }).filter((sg) => !allowedSpecsRaw || allowedSpecsRaw.includes(sg.specId));
 
+    // 显式编排不自动降级（用户已选定）；但把“单上下文是否装得下”的估算随任务记录下来，
+    // 由响应、run_started 事件与（可读工具开启时的）系统提示共同解释。
+    const gate = adviseOrchestration(String(body.goal ?? ''), scanRepoFacts(abs), {
+      tokenBudget: input.tokenBudget ?? config.limits.tokenBudget,
+    });
+
     input.orchestration = {
       // 宽度只允许收紧（真正的上限在 Runtime/工具里再取 min）
       maxWidth: maxWidthRaw === undefined ? undefined : clampNumber(maxWidthRaw, 1, config.subagent.maxWidth),
@@ -231,6 +239,7 @@ export function validateRunRequest(body: Record<string, unknown>, config: Runtim
       // 严格模式：提交前跑 L2 全量（默认 false；落盘后仍有宿主全量复验）
       strictVerify: orchRaw.strictVerify === true,
       suggestedSubtasks: suggested,
+      gate,
     };
     return { input };
   }
@@ -483,18 +492,30 @@ export function createApp(config: RuntimeConfig) {
     if (!goal.trim()) return res.status(400).json({ error: '缺少 goal 参数' });
     const allowMisc = req.query.allowMisc !== '0';
     const routing = classifyTask(goal, { allowMisc });
+    const preview = req.query.preview === '1';
     // 编排建议：规则式预筛（只有建议交给编排时才产出，避免无关噪音）
     let suggestedSubtasks: unknown[] = [];
+    let orchestrationAdvice: OrchestrationGate | undefined;
+    let runType = routing.runType;
+    let reason = routing.reason;
     const repoPath = typeof req.query.repoPath === 'string' ? req.query.repoPath.trim() : '';
     if (routing.runType === 'orchestrator' || req.query.preview === '1') {
-      const dirs = repoPath && existsSync(resolve(repoPath)) ? pickTopLevelDirs(resolve(repoPath)) : [];
+      const abs = repoPath && existsSync(resolve(repoPath)) ? resolve(repoPath) : null;
+      const dirs = abs ? pickTopLevelDirs(abs) : [];
       suggestedSubtasks = preSplitSubtasks(goal, {
         dirs,
         topics: extractTopics(goal),
         maxWidth: config.subagent.maxWidth,
       });
+      const facts = abs ? scanRepoFacts(abs) : null;
+      orchestrationAdvice = adviseOrchestration(goal, facts, { tokenBudget: config.limits.tokenBudget });
+      // 自动分流路径：单上下文装得下就降为 codebase；preview=1 只展示建议、不改变结果。
+      if (routing.runType === 'orchestrator' && !preview && orchestrationAdvice.recommend === 'single') {
+        runType = 'codebase';
+        reason = `${routing.reason}；编排预筛：${orchestrationAdvice.reason}`;
+      }
     }
-    res.json({ ...routing, suggestedSubtasks });
+    res.json({ ...routing, runType, reason, suggestedSubtasks, ...(orchestrationAdvice ? { orchestrationAdvice } : {}) });
   });
 
   /**
@@ -573,12 +594,44 @@ export function createApp(config: RuntimeConfig) {
             },
           }
         : {}),
+      ...(input.runType === 'orchestrator' && input.orchestration?.gate
+        ? { orchestrationGate: input.orchestration.gate }
+        : {}),
     });
   });
 
   /** MCP 客户端状态（安全视图：不含 token；未配置时 configured=0）。 */
   app.get('/api/mcp', (_req, res) => {
     res.json(mcpRuntime.status());
+  });
+
+  /**
+   * 手动重连 MCP（T4）：远端 server 重启/升级后，不必重启本进程。
+   * body 空对象 = 全部重连；{ name } = 只重连一个。失败仍按 server 隔离。
+   */
+  app.post('/api/mcp/reconnect', async (req, res) => {
+    const raw = (req.body ?? {}) as { name?: unknown };
+    if (raw.name !== undefined && (typeof raw.name !== 'string' || !raw.name.trim())) {
+      return res.status(400).json({ error: 'name 必须是字符串（省略 = 全部重连）' });
+    }
+    const name = typeof raw.name === 'string' ? raw.name.trim() : undefined;
+    try {
+      const status = await mcpRuntime.reconnect(name);
+      res.json(status);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      res.status(message.startsWith('未配置 MCP server') ? 404 : 500).json({ error: message });
+    }
+  });
+
+  /**
+   * 子任务历史（T7 轻量版）：按 spec 聚合成功率/耗时/token，默认排除 Mock。
+   * 数据源是 runs.resultJson（Runtime 已累积每次 run 的全部子任务），不需要新表。
+   */
+  app.get('/api/subtasks/stats', (req, res) => {
+    const limit = Math.max(1, Math.min(5000, Number(req.query.limit ?? 500) || 500));
+    const includeMock = ['1', 'true'].includes(String(req.query.includeMock ?? ''));
+    res.json(aggregateSubtaskStats(store.listRuns(limit), { includeMock }));
   });
 
   app.get('/api/runs/:id', (req, res) => {

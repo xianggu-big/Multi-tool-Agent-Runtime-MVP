@@ -60,6 +60,11 @@ export class ToolRegistry {
     this.tools.set(tool.name, tool);
   }
 
+  /** 撤销注册（MCP 重连时替换同名工具）；不存在时返回 false，便于调用方幂等处理。 */
+  unregister(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
   has(name: string): boolean {
     return this.tools.has(name);
   }

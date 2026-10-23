@@ -30,11 +30,15 @@ const inputSchema = z.object({
     .describe('来自子任务的发现；推荐对象形式 {from,note}（from 必填），字符串形式会丢失来源标注'),
   conflicts: z
     .array(
-      z.object({
-        between: z.array(z.string()).min(2).max(6).describe('产生冲突的子任务 id 列表'),
-        topic: z.string().max(300),
-        resolution: z.string().max(1000).describe('你如何处理这个冲突（采信谁 / 都保留 / 需人工）'),
-      }),
+      z.union([
+        z.object({
+          between: z.array(z.string()).min(2).max(6).describe('产生冲突的子任务 id 列表'),
+          topic: z.string().max(300),
+          resolution: z.string().max(1000).describe('你如何处理这个冲突（采信谁 / 都保留 / 需人工）'),
+        }),
+        // 字符串简写：保留原文，但明确标成「未结构化、需人工复核」，不伪造 between。
+        z.string().min(1).max(1000),
+      ]),
     )
     .max(10)
     .optional()
@@ -78,11 +82,21 @@ export const submitOrchestration: Tool = {
       );
     }
     const { findings, missingFromCount } = normalizeOrchFindings((parsed as any).findings);
+    const conflicts = parsed.conflicts?.map((c) =>
+      typeof c === 'string'
+        ? {
+            between: ['（未标注）'],
+            topic: c.slice(0, 300),
+            resolution: '（模型以字符串提交，未区分处理方式；需人工复核原文）',
+          }
+        : c,
+    );
     return okResult(
       {
         submitted: true,
         ...parsed,
         ...(findings ? { findings } : { findings: undefined }),
+        ...(conflicts ? { conflicts } : {}),
         ...(missingFromCount ? { missingFromCount } : {}),
       },
       Date.now() - started,

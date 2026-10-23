@@ -7,6 +7,7 @@
 //   - 这是小样本工程评测，不做统计显著性声明。
 
 import type { RunStatus, TraceEvent } from '../types.js';
+import { extractReadStats as extractReadStatsBase, readPathFromArgs } from '../runtime/readStats.js';
 
 export type CompactionStrategy = 'rolling' | 'legacy';
 
@@ -178,44 +179,24 @@ function p95(values: number[]): number {
   return sorted[idx];
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function readPathFromArgs(value: unknown): string | null {
-  let args = asRecord(value);
-  if (!args && typeof value === 'string') {
-    try {
-      args = asRecord(JSON.parse(value));
-    } catch {
-      return null;
-    }
-  }
-  if (!args) return null;
-  const raw = args.path ?? args.file ?? args.filename ?? args.filepath;
-  if (typeof raw !== 'string' || !raw.trim()) return null;
-  return raw.trim().replace(/\\/g, '/').replace(/^\.\//, '');
-}
-
-/** 从事件流统计 read_file 调用的重复读取；只依赖持久化事件，便于报告复核。 */
+/** 从事件流统计 read_file 调用的重复读取（口径与 run_digest 共用 `runtime/readStats`）。 */
 export function extractReadStats(
   events: Array<Pick<TraceEvent, 'type' | 'data'>>,
 ): { readCalls: number; uniqueReads: number; repeatedReads: number; paths: string[] } {
-  const readCalls = events.filter((e) => e.type === 'tool_call_requested' && e.data?.name === 'read_file');
-  const counts = new Map<string, number>();
-  for (const e of readCalls) {
-    const path = readPathFromArgs(e.data?.arguments);
-    if (!path) continue;
-    counts.set(path, (counts.get(path) ?? 0) + 1);
-  }
-  let repeatedReads = 0;
-  for (const n of counts.values()) repeatedReads += Math.max(0, n - 1);
+  const stats = extractReadStatsBase(events);
   return {
-    readCalls: readCalls.length,
-    uniqueReads: counts.size,
-    repeatedReads,
-    paths: [...counts.keys()].sort(),
+    readCalls: stats.total,
+    uniqueReads: stats.uniquePaths,
+    repeatedReads: stats.duplicateCalls,
+    // 兼容旧报告：这里需要的是**全部**路径（去重排序），不只是重复路径。
+    paths: [
+      ...new Set(
+        events
+          .filter((e) => e.type === 'tool_call_requested' && e.data?.name === 'read_file')
+          .map((e) => readPathFromArgs(e.data?.arguments))
+          .filter((p): p is string => Boolean(p)),
+      ),
+    ].sort(),
   };
 }
 

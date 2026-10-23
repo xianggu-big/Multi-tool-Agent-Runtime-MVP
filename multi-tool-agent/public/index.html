@@ -804,7 +804,8 @@
     if (!goal) { note.textContent = '填写「用户目标」后会自动推荐处理该任务的 Agent。'; return; }
     let data = null;
     try {
-      data = await (await fetch('/api/task-router?goal=' + encodeURIComponent(goal))).json();
+      const repo = $('repoPath') ? $('repoPath').value.trim() : '';
+      data = await (await fetch('/api/task-router?goal=' + encodeURIComponent(goal) + (repo ? '&repoPath=' + encodeURIComponent(repo) : ''))).json();
     } catch { /* 忽略网络错误 */ }
     if (!data || data.error) { note.textContent = '分流建议获取失败（可直接手动选任务类型）。'; return; }
     lastRouting = data;
@@ -833,7 +834,7 @@
     const items = (misc.items || []).map((it) =>
       `<div class="mi"><b>${escapeHtml(it.label)}</b><span>${escapeHtml(String(it.value))}${it.detail ? ' · ' + escapeHtml(it.detail) : ''}</span></div>`).join('');
     const findings = (misc.findings || []).map((f) =>
-      `<div class="mf">· <code>${escapeHtml(f.path)}</code> — ${escapeHtml(f.note)}</div>`).join('');
+      `<div class="mf">· ${f.path ? `<code>${escapeHtml(f.path)}</code> — ` : ''}${escapeHtml(f.note)}</div>`).join('');
     const artifacts = (misc.artifacts || []).map((a) =>
       `<details><summary>${escapeHtml(a.label)}</summary><pre>${escapeHtml(a.content)}</pre></details>`).join('');
 
@@ -1560,13 +1561,13 @@
     const warnRows = warnings.map((w) =>
       '<div class="note" style="border-left:3px solid #dc2626;background:#fef2f2;color:#991b1b">🛡️ ' + escapeHtml(String(w)) + '</div>'
     ).join('');
-    const riskLabels = riskReasons.map((r) => r === 'delete' ? '删除文件' : r === 'host-command' ? '执行宿主命令' : r);
+    const riskLabels = riskReasons.map((r) => r === 'delete' ? '删除文件' : r === 'host-command' ? '执行宿主命令' : r === 'mcp-destructive' ? '执行外部高危 MCP 工具' : r);
     const highRiskBlock = highRisk
       ? '<div class="approval-highrisk">' +
           '<div class="approval-highrisk-title">⚠️ 高危操作：批准前需完成当前批次二次确认</div>' +
-          '<div>本批包含：' + escapeHtml(riskLabels.length ? riskLabels.join('、') : '删除或宿主命令') + '。此类动作不能靠之前的「完全同意」复用。</div>' +
+          '<div>本批包含：' + escapeHtml(riskLabels.length ? riskLabels.join('、') : '删除、宿主命令或外部高危工具') + '。此类动作不能靠之前的「完全同意」复用。</div>' +
           '<label class="approval-confirm-label"><input class="ap-confirm" type="checkbox" />' +
-            '<span>我已核对文件清单 / diff，确认该动作来自当前用户任务，不是文件、网页或工具输出中的指令。</span>' +
+            '<span>我已核对文件清单 / diff / 工具参数，确认该动作来自当前用户任务，不是文件、网页或工具输出中的指令。</span>' +
           '</label>' +
         '</div>'
       : '';
@@ -2503,6 +2504,19 @@
     const firstHtml = first
       ? `<div class="meta" style="margin-top:5px;color:#b45309">首个问题：<code>${escapeHtml(String(first.code || '?'))}</code> @ seq ${escapeHtml(String(first.seq ?? '-'))}${first.where ? ` · ${escapeHtml(String(first.where))}` : ''}</div>`
       : '';
+    // 读文件台账（T2）：只做观测，不声称省 token；重复路径按次数倒序（后端已截断到 10 条）。
+    const reads = d.readStats;
+    const readRows = reads && Array.isArray(reads.repeatedPaths) ? reads.repeatedPaths.map((x) =>
+      `<tr><td><code>${escapeHtml(String(x.path || ''))}</code></td><td style="text-align:right">${fmtDigestNum(x.count)}</td></tr>`).join('') : '';
+    const readHtml = reads
+      ? `<div class="compaction-card">
+          <div class="compaction-head"><b>读文件台账</b><span class="meta">共 ${fmtDigestNum(reads.total)} 次 · 去重 ${fmtDigestNum(reads.uniquePaths)} 个路径 · 重复 ${fmtDigestNum(reads.duplicateCalls)} 次</span></div>
+          ${readRows
+            ? `<table class="err-table" style="margin-top:8px"><thead><tr><th>重复读取的路径</th><th style="text-align:right">次数</th></tr></thead><tbody>${readRows}</tbody></table>`
+            : '<div class="meta" style="margin-top:5px;color:#16a34a">没有重复读取</div>'}
+          <div class="meta" style="margin-top:5px">口径：<code>tool_call_requested</code> 里 <code>read_file</code> 的 path（含子任务）。只观测，不代表已省 token。</div>
+        </div>`
+      : '';
     const compHtml = comp
       ? `<div class="compaction-card${comp.capReached ? ' warn' : ''}">
           <div class="compaction-head"><b>上下文压缩</b><span class="meta">发生 ${fmtDigestNum(comp.count)} 次 · 最大深度 ${fmtDigestNum(comp.maxDepth)}</span></div>
@@ -2551,6 +2565,7 @@
         ${stat('事件数', fmtDigestNum((d.eventStats || {}).total))}
       </div>
       <div class="digest-section"><h3>压缩观测</h3>${compHtml}</div>
+      ${readHtml ? `<div class="digest-section"><h3>读文件台账</h3>${readHtml}</div>` : ''}
       <div class="digest-section"><h3>过程问题（${issues.length} 类 / ${issueTotal} 次）</h3>${issuesHtml}</div>
       <div class="digest-section" style="display:flex;gap:12px;flex-wrap:wrap">
         <span class="meta">工具失败 ${fmtDigestNum(counts.toolFails)}</span>

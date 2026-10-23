@@ -2,7 +2,8 @@
 
 > **一页读懂**：这个 Runtime 现在能做什么、实测到什么程度、哪里还不可靠、下一步该做什么。
 > **更新方式**：每次有实质改动就更新本文件（配合 `reports/CHANGELOG.md` 的明细）。
-> **最后更新**：2026-10-23 ｜ 对应测试规模：**64 个测试文件 / 430 个子测试（430 通过 / 0 失败 / 0 跳过）**；Docker 已启动，`40j` 已补跑通过；`eval:edit` 7/7 ｜ 参数现状见 `reports/PARAMETERS.md`
+> **最后更新**：2026-10-23 ｜ 对应测试规模：**67 个测试文件 / 444 个子测试（444 通过 / 0 失败 / 0 跳过）**；Docker 已启动，`40j` 已补跑通过；`eval:edit` 7/7 ｜ 参数现状见 `reports/PARAMETERS.md`
+> **真实端到端（2026-10-23）**：`npm run mcp:e2e`（真模型自主调用 MCP）与 `npm run e2e:write`（HTTP → 沙箱 → 审批 → 落盘 → 宿主复验）均 PASS；证据、token/耗时与边界见 `reports/MCP_WRITE_E2E.md`。**样本=各 1 次，不外推成功率**。
 > **项目工具**：`.agents/skills/{mta-verification,mta-reporting}/`（仓库级 Codex skill：验证/复跑流程、核心报告集 + 专项评测 + 收尾清单）
 > **安全审查**：2026-10-13 全面代码审查 + 对抗性测试（`reports/CODE_REVIEW_2026-10-13.md`）；**P0×2、P1×4 与 P2-1~P2-6 已修复并转为回归守卫（2026-10-19 收口）**，剩 P2-7（无鉴权，README 已声明仅本机）/ P3×3
 > **写能力**：2026-10-15 新增「沙箱 + 三级人工审批」受控写能力（M1）；2026-10-16 **M1' 接入 UI**（「允许修改文件」开关 + 修改意图确认对话框 + `allowWriteSpecs` 完整接线）；边界与缺口见 §4 R14/R15，验收与证据见 `docs/WRITE_AND_APPROVAL.md`
@@ -37,7 +38,10 @@
 | **子 Agent 生命周期** | ✅ 可用 | importance 三档（ephemeral/session/durable）+ 七条释放判定 + LRU 池驱逐；一次性任务结果采纳即释放、审计类保留供追问（`SubAgentLifecycle.ts`，31 测试） |
 | **知识库语义召回** | ✅ 可用 | FTS5 原生 MATCH（AND 语义）与 vec0 kNN **均已实测生效**（`available=true, vectors=2`，回归守卫钉死原生可用性）；LIKE / 内存余弦为显式兜底 |
 | **切块级 RAG（chunk + 混合检索 + rerank）** | ✅ 可用 | 文档 → 512/64 切块（`text` 可精确按偏移切片，标题只进 `embedText`）→ embedding（离线 hash 默认；设 `MTA_EMBEDDING_MODEL` 切真实模型）→ BM25 + Flat/HNSW/IVF（支持删除/upsert）→ RRF/加权融合 → rerank（尾部短块按原文区间合并，overlap 不重复）；`POST /api/rag/rebuild`（分页、上限 5 万文档）、`GET /api/rag/search`、Agent 工具 `knowledge_search`；`npm run rag:bench` / `rag:ablation` 产出 `reports/RAG_EVAL.md` / `RAG_ABLATION.md`（19 文档 / 151 chunks / 18 查询：RRF 88.9% → rerank **100%**，MRR 0.690→0.750，nDCG 0.536→0.638） |
-| **MCP（server + client + 桥接 + 主路径配置）** | ✅ 可用 | stdio / Streamable HTTP（客户端增量解析 SSE + `Mcp-Session-Id`）两种 transport；`initialize → tools/list → tools/call`；`registerMcpTools()` 把外部工具变成普通 Tool（JSON Schema 原样暴露，权限 `mcp:call`，风险按 annotations 推断）；取消信号可穿透到 `notifications/cancelled`（客户端超时也会主动发 `reason:'timeout'`）；`POST /mcp` / `DELETE /mcp`。**2026-10-23 起主路径可配**：`MTA_MCP_SERVERS`（JSON 数组 + `names` 白名单）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池（code-edit 子 Agent 不注入）；`GET /api/mcp` 安全状态；单 server 失败只报 `MCP_UNAVAILABLE`，不拖垮服务。**真实 MCPHub 0.12.10 已 E2E**：54 工具、真实调用 104ms、run 工具池含 `mcp_hub_*`（HEALTH 附录 D）。回归 `tests/44` + `tests/64` |
+| **MCP（server + client + 桥接 + 主路径配置 + 安全/运维）** | ✅ 可用 | stdio / Streamable HTTP（客户端增量解析 SSE + `Mcp-Session-Id`）两种 transport；`initialize → tools/list → tools/call`；`registerMcpTools()` 把外部工具变成普通 Tool（JSON Schema 原样暴露，权限 `mcp:call`，风险按 annotations 推断）；取消信号可穿透到 `notifications/cancelled`（客户端超时也会主动发 `reason:'timeout'`）；`POST /mcp` / `DELETE /mcp`。**主路径可配**：`MTA_MCP_SERVERS`（JSON 数组 + `names` 白名单）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池；`GET /api/mcp` 安全状态；单 server 失败只报 `MCP_UNAVAILABLE`。**2026-10-23 补安全与运维**：`destructiveHint=true` 默认必须人工批准（无审批通道 → `MCP_APPROVAL_REQUIRED`；拒绝不执行），`POST /api/mcp/reconnect` 可把 error 恢复为 ready 且不产生同名工具冲突。**真实 MCPHub 0.12.10 已 E2E**（54 工具 / 104ms）；**真实 DeepSeek 已自主选择 MCP 工具**（`npm run mcp:e2e`，3,756 tok / 2.8s）。回归 `tests/44` + `tests/64` |
+| **编排预筛闸门** | ✅ 可用 | 自动分流先估算「单上下文是否装得下」+ 多信号（交叉验证/分区审计/并行）；装得下就不默认编排。显式编排不强制降级，但 gate 写入响应/`run_started`/系统提示，可解释「为什么没拆」。回归 `tests/65`；**未重做真实 A/B** |
+| **读文件台账** | ✅ 可用 | `run_digest.readStats`：`read_file` 总次数 / 去重路径 / 重复次数 / Top 重复路径；前端复盘面板可见。只观测，不承诺省 token；回归 `tests/56g` |
+| **子任务历史统计** | ✅ 可用 | `GET /api/subtasks/stats` + `npm run stats:subtasks`：按 spec 聚合成功率/平均耗时/token，默认排除 Mock；零迁移（聚合 `runs.resultJson`）。回归 `tests/67` |
 | **Function calling 控制** | ✅ 可用 | `tool_choice`（auto/none/required/指定函数）与 `parallel_tool_calls` 按 run 透传，HTTP 层校验非法值/白名单（400）；forced tool 不在本 run 工具池时执行前直接 `INVALID_TOOL_CHOICE`（不调用模型）；同轮多工具走工作池并发（`maxToolConcurrency`） |
 | **慢回答诊断** | ✅ 可用 | `GET /api/runs/:id/diagnosis`：wall vs busy、模型/工具 sum vs union、并发节省、首 token、按 step 的 token/cost 热点与建议；TTFT 仅实时事件可得（`llm_delta` 不落盘） |
 | **模型调用重试预算** | ✅ 可用 | 429/5xx/网络瞬断/流空闲 指数退避重试，默认 2 次；流式吐过增量则不再重试防重复 |
@@ -116,12 +120,12 @@
 | # | 风险 / 缺口 | 影响 | 建议动作 |
 |---|---|---|---|
 | R1 | 除 DeepSeek 外的预设未实测（本机仅配置 DeepSeek Key） | 换 Provider 可能需现场调试 | 复现命令已固化在 `reports/PROVIDER_BENCHMARK.md` §3，配 Key 即跑 |
-| R2 | ~~并行真实收益未量化~~ → **已量化（2026-10-14）**：同任务下编排约 7× token / 6× 墙钟，**未回本** | 默认走编排会显著烧钱 | 修 `search_files` 后按 `reports/PARALLEL_AB.md` §4 重跑；加「单上下文能否装下」预判门槛 |
+| R2 | ~~并行真实收益未量化~~ → **已量化（2026-10-14）**：同任务下编排约 7× token / 6× 墙钟，**未回本**。**2026-10-23 已加预筛闸门**（自动分流装得下就不编排），但**未重跑 A/B**，不能说「成本已解决」 | 默认走编排会显著烧钱 | 结构性缓解已上线；需要用真实任务重跑 A/B 才能给出新的成本比 |
 | R3 | `web_search` 默认离线资料；真实搜索未验证 | 调研结论可能来自离线样本 | 配 Serper Key 后实测 |
 | R4 | 子 Agent 不可恢复（独立精简循环，无检查点） | 长时子任务失败需整体重派 | 子任务加检查点 OR 限定子任务时长（当前 90~150s） |
 | R5 | ~~错误报告不聚合~~ → **已解决（2026-10-14）**：`/api/errors?view=summary` 聚合 + 前端「错误」页签 | — | 剩余：无告警（可加阈值触发） |
 | R6 | `evidence` 未绑定文件版本（只记 `file:line`） | 文件改动后旧结论不会失效 | evidence 加内容哈希或 mtime |
-| R7 | 子任务不单独落库（存 `runs.resultJson` + 事件） | 跨 run 查"某 spec 历史成功率"要扫事件 | 需要时建 `subtasks` 表 |
+| R7 | 子任务不单独落库（存 `runs.resultJson` + 事件） | 跨 run 查"某 spec 历史成功率"原先要扫事件 | **2026-10-23 已有零迁移聚合**（`/api/subtasks/stats`，默认排除 Mock）；样本变大后再考虑建 `subtasks` 表 |
 | R8 | 前端无鉴权、HTTP 明文 | 仅可本机使用 | 保持不暴露公网；需要时加 token 鉴权 |
 | R9 | `confidence` 未标定（模型自报）→ 只作软提示 | 不能作为硬门控 | 要做硬门控需先标定 + 监控升级率 |
 | **R14** | **写能力边界与诚实清单**（M1，须如实披露）：① 容器内**无网络隔离**（`run_command` 可联网）；② `run_command` **落宿主后的副作用无法从沙箱同步**，只能靠 git/备份兜底（审批卡已标注）；③ **Linux 沙箱 ≠ Windows 宿主**：靠 L2 宿主复验 + 失败自动回滚，环境性失败标 `ENV_MISMATCH`（不算模型改错）；④ 沙箱快照走 `docker cp`（src+tests ≈1MB；node_modules 走镜像不进快照）；⑤ **重派次数 × 3 轮重试的最坏成本存在**（交接 brief 只保证不重复劳动，不承诺不烧 token）；⑥ 本里程碑**不做**主 Agent 写权限、完整人工调度接口（改派/暂停）、`SubAgentLifecycle` 运行期接线（如实标注"已实现、未接线"） | 使用者需知道"能写"不等于"安全无边界" | 明细与验收证据见 `docs/WRITE_AND_APPROVAL.md` §0 诚实清单 / §3 |
@@ -132,7 +136,7 @@
 | **R19** | **崩溃恢复边界**（2026-10-20）：只覆盖**落盘窗口**（apply-journal 写入后、change_applied 前），不覆盖模型执行中断后的对话恢复；自动恢复只处理「编辑 + 文件消失 + 有备份」，已落盘编辑/新增必须由用户明确回滚；旧日志/损坏日志只做人工比对；单写者前提（无跨进程文件锁）。`tests/51g` 已用独立进程在 `rm`→`rename` 窗口真实 `SIGKILL`（Windows exit=1） | 不能宣称 exactly-once；多实例/共享仓库需另做锁与租约 | 若做多实例：加 apply 锁 + 租约 + 启动对账；若要覆盖执行中断：持久化完整 RunInput/消息历史 |
 | **R20** | **提示注入只做启发式降风险**（2026-10-20）：42 条固定样本测得恶意检出 20/22、正常误报 2/20；纯 base64 / URL 编码仍漏检，安全文档提到攻击短语会误报（b19/b20）；污点是 run 级，不是逐句 provenance；不可信内容仍会进入模型上下文。已做结构性收紧：**删除 / 宿主命令批次即使人工选 `allow_file` 也不进入粘性集合**（`stickySkipped`），且批准必须带当前批次 `confirmHighRisk`；Runtime 缺确认时不 resolve，HTTP 返回 400。 | 恶意仓库/网页仍可能影响模型判断；二次确认只证明用户做了显式选择，不证明看懂 diff；审批仍可能被社会工程 | 扩真实样本并降低误报；对「外传密钥 / 发布 / 改审批配置」做独立二次确认/能力令牌；长期做来源级 provenance / 只读摘要。`security:redteam --strict` **暂不接 CI 硬门禁** |
 | **R21** | **无测试仓库的「验证真空」**（2026-10-20）：`unavailable` 不阻断落盘，只保证文案诚实；`typecheck` 只证明类型通过，不证明行为正确 | 用户可能把「没报错」误读成「已验证」 | 结果/UI 已标注 mode/coverage；后续可加「必须验证才允许落盘」严格模式；编辑评测集按仓库类型分层统计 |
-| **R22** | **编辑评测的模型层覆盖**（2026-10-20 发现；2026-10-22 补真实模型层；**2026-10-23 扩盲测/多文件**）：~~7 个确定性场景不能证明 LLM 能改对真实任务~~ → `eval:edit:real` 现有 26 条（20 引导 + 4 盲测 + 2 多文件）**26/26**、L2 **26/26**、833,082 tokens / \$0.0248。仍**不覆盖**大型重构、HTTP/UI 人工审批全链路、粘性放行、取消/超时、L1 失败后重生成成功率 | 可说「受控小任务及小规模多文件在该管线中 26/26」，不能说「模型能重写项目」 | 残余：真实 HTTP run + 人工审批 + UI 事件流 smoke；更多文件/更大 fixture；管线评测继续做 CI 门禁 |
+| **R22** | **编辑评测的模型层覆盖**（2026-10-20 发现；2026-10-22 补真实模型层；**2026-10-23 扩盲测/多文件 + 真实 HTTP 审批**）：~~7 个确定性场景不能证明 LLM 能改对真实任务~~ → `eval:edit:real` 现有 26 条（20 引导 + 4 盲测 + 2 多文件）**26/26**、L2 **26/26**、833,082 tokens / \$0.0248；`npm run e2e:write` 另跑通真实 HTTP run + 人工审批 + 落盘 + 宿主复验（1 次，38,542 tokens / 95.7s）。仍**不覆盖**大型重构、粘性放行、取消/超时、L1 失败后重生成成功率 | 可说「受控小任务及小规模多文件在该管线中 26/26，且 HTTP 审批链路可用」，不能说「模型能重写项目」 | 残余：更多文件/更大 fixture；粘性/取消/超时 smoke；管线评测继续做 CI 门禁 |
 | **R23** | **上下文压缩的「摘要套摘要」质量衰减**（2026-10-20 发现，**2026-10-21 已修**）：① ~~水位用累计 token，一旦 ≥60% 就每步都压缩，没有迟滞~~ → 现累计水位只作门禁，实际再压要求活动区 ≥2000 字符且自上次压缩后新增 ≥4000 字符或 ≥4 条消息；② ~~旧摘要被当普通消息重压、每条按 200 字符截断~~ → 现滚动摘要保留旧摘要原文，只压新增消息；首次压缩把任务目标原文写入摘要；摘要达 24000 字符上限时停止压缩并标记 `capReached`，绝不截断旧摘要。新增落盘事件 `context_compacted` + `run_digest.compaction` 观测（次数/深度/移除条数/摘要大小）。回归 `tests/33h~33l`、`56f` | 长任务早期目标与关键事实不再逐轮衰减；崩溃型 400 仍由 M18 守卫 | 残余：真实 A/B 已完成（2026-10-21，30 run），结论是 `not_proven`（质量无回退、效率未达 15% 门槛），不能外推成滚动摘要更优；摘要在 24000 字符后停止压缩（防无限增长）；前端 compaction 面板已落地（R24） |
 | **R25** | **压缩水位语义错误**（2026-10-21 发现并修复）：水位原来用 `Budget.tokenBudget` + 累计消耗，把「任务总预算」当「上下文窗口」——预算大的 run 明明 prompt 很小也不压，预算小的 run 反而过早压。现改为 `lastPromptTokens / provider.contextWindow`（DeepSeek 预设 1,048,576，Mock 32,768）；窗口未知才回退累计预算并标 `watermarkSource=unknown`；usage 缺失按字符估算并标 `estimated`。回归 `tests/33m/33n/33o/33p`、`56f` | 压缩时机与真实上下文大小对齐；事件/复盘能解释「为什么压/为什么没压」 | 其余 Provider 的 `contextTokens` 未补齐（不确定就不填）；真实长任务 A/B 已完成（30 run），结论 `not_proven` |
 | **R24** | **历史数据未回补 + 复盘无 UI**（2026-10-20 发现；**前端面板 2026-10-21 已落地**）：① 修复前产生的重复 seq（如 `run_mvgejh0e_3e6c9b74` 225 行/201 seq）不回补，回放观感仍差；② ~~`run_digest` 只有 DB/JSONL/事件与 CLI/API，前端暂无展示面板~~ → 已新增「复盘」页签（筛选 / 列表 / 详情 / 过程问题 / 压缩观测 / 原始 JSON；实时 `context_compacted` 卡片；`run_digest` 自动刷新）；③ 历史 398 个 run 没有摘要（接口 404 并说明，仍不回填） | 复盘可在工作台内完成；老 run 仍只能回查 events | 残余：历史数据不回填；一次性回填脚本可选；重复 seq 只影响观感，不修数据 |
@@ -231,6 +235,7 @@ curl -s "http://localhost:3000/api/errors?view=summary"   # 高频错误聚合�
 | **`reports/RUN_REVIEW_2026-10-16.md`**（复核快照，一次性） | 想核查某段实测会话「agent 说法 vs 实际记录」：逐条判定 + 证据索引（按需追加新复核） |
 | **`reports/HEALTH_CHECK_2026-10-23.md`**（全身检查，一次性，只读） | 要接 MCP / 改权限 / 补契约门禁之前：门禁基线、权限矩阵、P0（`permissionsOf` 缺失与 `maxRiskLevel` 未校验）、建议改动与验收方法 |
 | **`reports/UI_STREAM_PERF.md`**（人写） | 想验证“长回答会不会把浏览器卡死”：真实 Edge + 真实 SSE，5 万条增量 burst 的 Task/JS/Layout、longtask、帧间隔与修复前后 DOM 节点对照；`npm run perf:stream-ui` |
+| **`reports/MCP_WRITE_E2E.md`**（人写，2026-10-23） | 想核实「模型真的会自己调 MCP 工具吗」「HTTP 审批真的会落盘并复验吗」：两条真实 E2E 的 token/耗时/事件证据、暴露的摩擦与修复、复现命令与边界 |
 | **`docs/WRITE_PRINCIPLES.md`** | 要改**写路径**（工具 / 审批 / 沙箱 / 回滚）之前：方针层原则（能力常开、动作门控）+ 四道审核闸 + 四层回溯 + 自检清单 |
 | **`docs/SECURITY_BOUNDARIES.md`** | 要处理不可信内容 / 提示注入：威胁模型、四层防线、run 污点与审批降权、高危动作禁用粘性 + 当前批次二次确认、红队结果与已知缺口、复现方式 |
 | **`docs/RAG_AND_AGENT_STACK.md`** | 要回答/实现 RAG 与 Agent 应用栈：chunk/embedding 取舍、HNSW vs IVF、RRF+rerank 实测、MCP/function calling、慢回答诊断、流式与中断、LangGraph/LoRA/vLLM |

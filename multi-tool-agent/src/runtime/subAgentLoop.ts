@@ -21,6 +21,7 @@ import type { SandboxAccess, ToolContext, ToolRuntimeConfig } from '../tools/typ
 import type { SubAgentSpec } from '../agents/specs.js';
 import { Tracer } from '../trace/Tracer.js';
 import { Budget } from './Budget.js';
+import { subAgentToolNames } from './subAgentTools.js';
 
 export interface SubAgentRunParams {
   parentRunId: string;
@@ -136,7 +137,10 @@ export async function runSubAgent(params: SubAgentRunParams): Promise<SubtaskOut
   );
   params.onBudget?.(budget, 'start'); // M1：登记预算（审批等待时由 Runtime 暂停/恢复）
 
-  const allowedTools = spec.tools.filter((t) => registry.has(t));
+  const allowedTools = subAgentToolNames(spec.tools, {
+    registryHas: (name) => registry.has(name),
+    runTestsEnabled: config.codebase.runTestsEnabled,
+  });
   const toolCfg: ToolRuntimeConfig = {
     search: config.search,
     codebase: config.codebase,

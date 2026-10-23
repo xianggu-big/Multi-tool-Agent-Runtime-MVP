@@ -41,9 +41,12 @@ npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000  # 26 �
 npm run eval:compaction    # 上下文压缩 A/B（30 run；需 DEEPSEEK_API_KEY，约 $0.03）→ reports/COMPACTION_AB.md
 npm run security:redteam   # 42 条注入样本 → reports/INJECTION_REDTEAM.md
 npm run digest:list         # 每次 run 的复盘摘要（成功也记；默认只看有问题的）
+npm run stats:subtasks      # 按 spec 聚合子任务成功率/耗时（默认排除 Mock；不建新表）
 npm run perf:stream-ui -- --events=50000   # 真实浏览器长流式渲染开销 → reports/UI_STREAM_PERF.md（需 Edge/Chrome）
 # MCP 真实 server 探针（token 只从环境变量读，不落盘）：
 #   MTA_MCP_PROBE_URL=http://127.0.0.1:8900/mcp MTA_MCP_PROBE_TOKEN=... npm run mcp:probe
+npm run mcp:e2e             # 真实模型自主调用 MCP 工具（本地 /mcp + 真 DeepSeek；需 DEEPSEEK_API_KEY）
+npm run e2e:write           # 写能力全链路：HTTP → 沙箱 → 审批 → 落盘 → 宿主复验（需 Docker + Key）
 ```
 
 > **⚠️ 常见坑：`ERR_DLOPEN_FAILED` / `NODE_MODULE_VERSION 不匹配`**
@@ -114,6 +117,35 @@ npm start                  # 5) 打开 UI，提交一个 codebase 任务
 | 测试卡住 | Docker 未启动或镜像缺失 | 启动 Docker；`node scripts/sandbox/build-image.mjs` |
 
 ---
+
+## 1.5 架构一图看懂
+
+```mermaid
+flowchart LR
+  UI[Web 工作台 / SSE] --> API[HTTP API]
+  API --> LOOP[共享 Agent Loop<br/>预算 / 检查点 / 取消]
+  LOOP --> R{runType}
+  R --> CB[codebase]
+  R --> RS[research]
+  R --> MS[misc]
+  R --> OR[orchestrator]
+  OR -->|delegate_subtasks| POOL[子 Agent 池<br/>深度≤1 / 预算隔离 / 有界并发]
+  POOL --> CB
+  LOOP --> REG[Tool Registry<br/>权限 / 超时 / 风险分级]
+  REG --> RO[本地只读工具]
+  REG --> WR[写工具]
+  WR --> SB[Docker 沙箱 + 检查阶梯] --> AP[人工审批] --> APPLY[落盘] --> HV[宿主复验 / 失败回滚]
+  REG --> MCP[MCP 客户端<br/>白名单 / 高危审批 / 手动重连]
+  MCP --> EXT[(外部 MCP Server)]
+  LOOP --> LLM[LLM Provider<br/>Mock / OpenAI 兼容]
+  LOOP --> TR[(Tracer → events / run_digest)]
+```
+
+三条结构性不变量（不靠提示词自觉）：
+
+1. **工具池单一真值**：主 Agent、子 Agent、HTTP 回显共用同一份过滤结果（`toolPoolFor` / `subAgentToolNames`）。
+2. **写能力 fail-closed**：未授权 / 无沙箱 / 无审批通道 → 直接拒绝；落盘失败不伪装成功。
+3. **不可信输入不升权**：工具输出命中注入特征后，本 run 禁用粘性自动放行，高危动作仍需当前批次二次确认。
 
 ## 2.1 在界面上配置 LLM（推荐：不用改 .env）
 
@@ -274,6 +306,7 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/RAG_ABLATION.md` —— **RAG 消融**（生成物）：chunk 大小/overlap 与 embedding 维度对 Recall/MRR/nDCG/存储的影响；`npm run rag:ablation`。
 - `reports/RAG_IMPROVEMENT_2026-10-23.md` —— **RAG 命中率提升方案**（人写，只读）：为什么 vector 单路只有 55.6%（embedding 是词法哈希 + 评测集偏袒字面匹配）、六条提升路线（重建评测集 → 换 bge embedding → 多查询 → cross-encoder rerank → pre-filter → small-to-big）、三层指标清单与诊断映射、生成侧提示词、本机跑 R1 蒸馏版的可行性。
 - `reports/COMPACTION_AB.md` —— **上下文压缩 A/B**（生成物）：rolling vs legacy 的 30 run 真实模型对照、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论是 `not_proven`，不要外推成“滚动摘要更优”。
+- `reports/MCP_WRITE_E2E.md` —— **两条真实端到端证据**（人写）：`npm run mcp:e2e`（模型自主调用 MCP 工具）与 `npm run e2e:write`（HTTP → 沙箱 → 人工审批 → 落盘 → 宿主复验）的 token/耗时/事件、暴露的摩擦与边界。
 - `reports/EDIT_EVAL.md` —— **编辑管线评测**（生成物）：真 Docker + 真审批 + 真落盘 + 宿主复验/回滚，7 个确定性场景；`npm run eval:edit`。**注意：衡量管线，不是模型编辑智力**。
 - `reports/EDIT_EVAL_REAL.md` —— **真实模型编辑评测**（生成物）：26 条任务（20 引导 + 4 盲测 + 2 多文件），Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；当前 **26/26（L2 26/26）**、833,082 tokens / $0.0248，单轮 95% Wilson 下界 **87.1%**；逐任务脱敏证据在 `reports/EDIT_EVAL_REAL_EVIDENCE.json`。`npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000`。**不外推大型重构或需要人工澄清的需求**。
 - `reports/INJECTION_REDTEAM.md` —— **提示注入红队评测**（生成物）：42 条恶意/正常/已知缺口样本；当前恶意检出 20/22、正常误报 2/20；`npm run security:redteam`。**是启发式降风险，不是防住注入**。

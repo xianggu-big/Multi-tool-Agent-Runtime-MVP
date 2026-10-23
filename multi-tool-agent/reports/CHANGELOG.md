@@ -14,6 +14,7 @@
 
 | 日期 | 参数 | 旧值 | 新值 | 原因 |
 |---|---|---|---|---|
+| 2026-10-23 | 新增 `McpBridgeOptions.requireApprovalForHighRisk` | — | **true** | `destructiveHint=true` 的 MCP 工具在本地沙箱之外执行，副作用无法复验；默认必须人工批准，缺审批通道时 fail-closed |
 | 2026-10-23 | 新增 `MTA_MCP_SERVERS` | — | **空数组**（不连接任何外部 MCP） | JSON 数组显式 opt-in；每个 server 必须给 `names` 白名单，避免外部工具 schema 全量进上下文；非法配置启动即报错 |
 | 2026-10-22 | 新增 `RunInput.allowRunTests`（本 run 覆盖，非环境变量） | — | 未设置 = 跟随 `CODEBASE_RUN_TESTS_ENABLED` | 运行测试是「在目标仓库执行代码」的能力：默认关闭时 `run_tests` 不进工具池；界面显式勾选才开启本 run |
 | 2026-10-21 | 新增 `COMPACT_MIN_ACTIVE_CHARS` / `COMPACT_MIN_NEW_CHARS` / `COMPACT_MIN_NEW_MESSAGES` | — | **2000 / 4000 / 4** | 压缩迟滞：累计 token 水位只作为门禁，活动区不够大或自上次压缩后没有足够新增时不再压缩，避免「水位过 60% 后每步都压」 |
@@ -78,6 +79,47 @@
 ---
 
 ## 2026-10-23
+
+### 编排预筛 + MCP 安全/运维 + 真实 E2E 收口（T1~T7）
+
+**为什么现在做**：上一轮把 MCP 与工具池接上了，但还有三类「能力在、产品路径不在」的问题：
+① 编排是默认选项，小任务也会被拆成多个子任务重复读文件（PARALLEL_AB 实测 7× token 未回本）；
+② `destructiveHint=true` 只被标成 high，却不会弹审批；MCP server 重启后只能重启本进程；
+③ 缺一条「真实模型 + 真实 HTTP + 真实沙箱」的验收证据，只有工具函数级回归。
+
+- **T1 编排预筛闸门**：新增 `src/runtime/orchestrationGate.ts`。`POST /api/runs` 与 `/api/task-router?repoPath=`
+  会扫描仓库事实（跳过隐藏目录/符号链接，4000 文件 / 32MB 上限），估算「单上下文是否能装下」：
+  装得下且没有多信号（交叉验证/分区审计/并行）时，**自动分流不再给 orchestrator**；
+  显式编排**不强制降级**，但把 gate 写进响应与 `run_started`，并在 `allowSelfTools` 时提示主 Agent 优先自检。
+  回归 `tests/65`（4 例）。**边界**：估算按 `bytes/3.2 + 8000`，不是精确 tokenizer；真实 A/B 未重跑。
+- **T2 读文件台账**：新增 `src/runtime/readStats.ts`，从 `tool_call_requested` 统计 `read_file` 的总次数、
+  去重路径数、重复次数与 Top 重复路径；写入 `run_digest.readStats`、JSONL 与前端「复盘」面板。
+  **只做观测，不声称省 token**——跨子任务共享缓存涉及信息隔离，另行评估。回归 `tests/56g`。
+- **T3 MCP 高危工具人工闸门**：`destructiveHint=true` 现在默认必须人工批准：无审批通道 → `MCP_APPROVAL_REQUIRED`
+  （fail-closed）；拒绝 → `MCP_APPROVAL_DENIED` 且不产生副作用。Runtime 改为**合并**调用方风险原因而不是覆盖，
+  子 Agent 循环也注入审批通道（不再只限写 spec）。新增风险原因 `mcp-destructive`（前端文案「执行外部高危 MCP 工具」）。
+  回归 `tests/44h`。
+- **T4 MCP 手动重连**：`McpClientRuntime.reconnect(name?)` + `POST /api/mcp/reconnect`（无 body = 全部）。
+  重连前先摘掉旧工具再重注册（`ToolRegistry.unregister`），失败仍按 server 隔离；注册到一半失败会清理半截工具。
+  `tests/64i` 实测 error → ready 恢复；`tests/64j` 覆盖 400/404。
+- **T5 真实模型自主选 MCP 工具**：新增 `npm run mcp:e2e`。真实 DeepSeek、本进程 `/mcp`、临时 DB；
+  以**落盘事件**为准断言模型发起了 `mcp_hub_knowledge_stats` 调用。两次运行：修复前 9,487 tok / $0.000613 / 7.1s，
+  修复后 **3,756 tok / $0.000127 / 2.8s**（差异来自 `submit_result` 接受字符串简写，见下）。证据 `reports/MCP_WRITE_E2E.md`。
+- **T6 写能力 HTTP 端到端**：新增 `npm run e2e:write`。真实 HTTP → orchestrator 派发 code-edit → Docker 沙箱 →
+  `allow_once` 审批 → 落盘 → 宿主 L2 复验。实测 completed / **38,542 tok** / 95.7s / 1 次审批 / `src/calc.ts` 修复 /
+  `verification_completed(phase=host, ok=true)` / 0 回滚。同时修掉三个真实摩擦：`delegate_subtasks` 接受 JSON 字符串、
+  `submit_orchestration.conflicts` 接受字符串（标为未结构化），以及 `run_tests` 关闭时不再出现在子 Agent 工具列表
+  （`src/runtime/subAgentTools.ts`）。回归 `tests/66`。
+- **T7 子任务历史（轻量版）**：新增 `src/runtime/subtaskStats.ts` + `GET /api/subtasks/stats` + `npm run stats:subtasks`。
+  不建新表：直接聚合 `runs.resultJson` 里 Runtime 累积的 `subtasks`，按 spec 给出成功率/平均耗时/token，**默认排除 Mock**；
+  损坏 JSON 不会让统计失败。回归 `tests/67`。当前本机真实样本：`code-audit 12（66.7%）`、`dir-inventory 6（100%）`、
+  `code-edit 2（0%，均 limit_reached，历史样本）`、`doc-research 1（limit_reached）`——样本小，只作定位用。
+- **T9 展示**：README 增加「架构一图看懂」（Mermaid）与三条结构性不变量；快速开始补 `mcp:e2e` / `e2e:write` / `stats:subtasks`。
+  **LICENSE 未加**：许可证是用户的法律选择，不擅自默认 MIT。
+
+**验证**：typecheck 0 错误；`npm test` **67 文件 / 444 子测试 / 444 通过 / 0 失败 / 0 跳过 / 约 26s**；
+`agents:lint` 三项通过；Linux 容器（`node:24.22.0`）等价复跑 **443 通过 / 1 跳过（Docker）/ 0 失败**；
+`mcp:e2e` PASS；`e2e:write` PASS。
 
 ### 长流式渲染量化 + MCP 真实 E2E + 工具池收口
 

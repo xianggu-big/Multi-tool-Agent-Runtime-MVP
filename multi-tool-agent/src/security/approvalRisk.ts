@@ -14,9 +14,12 @@ export interface ApprovalRisk {
 export function assessApprovalRisk(opts: {
   ops?: ReadonlyArray<string>;
   hasCommands?: boolean;
+  /** MCP annotations 声明 destructiveHint=true（外部副作用，本地沙箱无法复验） */
+  mcpDestructive?: boolean;
 }): ApprovalRisk {
   const reasons: ApprovalRiskReason[] = [];
   if (opts.ops?.includes('delete')) reasons.push('delete');
   if (opts.hasCommands === true) reasons.push('host-command');
+  if (opts.mcpDestructive === true) reasons.push('mcp-destructive');
   return { highRisk: reasons.length > 0, reasons };
 }

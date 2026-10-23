@@ -43,7 +43,8 @@ function redactSecret(text: string, secret: string | undefined): string {
 
 export class McpClientRuntime {
   private startPromise: Promise<void> | null = null;
-  private clients: McpClient[] = [];
+  /** 按 server 名保存连接：重连时只替换目标 server，不影响其它 server。 */
+  private clients = new Map<string, McpClient>();
   private closed = false;
   private readonly statuses: McpServerStatus[];
 
@@ -99,8 +100,47 @@ export class McpClientRuntime {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    await Promise.all(this.clients.map((c) => c.close().catch(() => {})));
-    this.clients = [];
+    await Promise.all([...this.clients.values()].map((c) => c.close().catch(() => {})));
+    this.clients.clear();
+  }
+
+  /**
+   * 手动重连（POST /api/mcp/reconnect）：远端 server 重启/换版本后，不必重启本进程。
+   * 语义：
+   *   - 先摘掉该 server 已注册的工具，再重建连接；失败保持 error 且不影响其它 server；
+   *   - 不带 name = 全部重连；name 不存在 → 抛错，由 HTTP 层转 404。
+   */
+  async reconnect(name?: string): Promise<McpRuntimeStatus> {
+    if (this.closed) throw new Error('MCP runtime 已关闭');
+    const targets = name ? this.specs.filter((s) => s.name === name) : this.specs;
+    if (name && !targets.length) throw new Error(`未配置 MCP server: ${name}`);
+    // 首次启动可能还在飞：有界等待，避免和 connectOne 并发注册同名工具。
+    await this.ready(10_000);
+    await Promise.all(targets.map((spec) => this.reconnectOne(spec)));
+    this.onTools(this.statuses.flatMap((s) => s.tools));
+    return this.status();
+  }
+
+  private async reconnectOne(spec: McpServerConfig): Promise<void> {
+    const status = this.statuses.find((s) => s.name === spec.name)!;
+    const previous = this.clients.get(spec.name);
+    if (previous) {
+      await previous.close().catch(() => {});
+      this.clients.delete(spec.name);
+    }
+    this.dropTools(status);
+    status.state = 'idle';
+    status.error = undefined;
+    status.missing = undefined;
+    status.connectedAt = undefined;
+    await this.connectOne(spec);
+  }
+
+  /** 清掉某 server 的工具状态并撤销注册（重连前必做；Registry 对同名注册会抛错）。 */
+  private dropTools(status: McpServerStatus): void {
+    for (const name of status.tools) this.registry.unregister(name);
+    status.tools = [];
+    status.toolCount = 0;
   }
 
   private async connectAll(): Promise<void> {
@@ -113,6 +153,8 @@ export class McpClientRuntime {
     const status = this.statuses.find((s) => s.name === spec.name)!;
     status.state = 'connecting';
     status.error = undefined;
+    // 上一次连接可能只注册了一部分工具：先清干净，保证重试/重连可重复执行。
+    this.dropTools(status);
     const client = new McpClient(
       new HttpTransport({
         url: spec.url,
@@ -122,6 +164,7 @@ export class McpClientRuntime {
       { timeoutMs: spec.timeoutMs, clientName: 'multi-tool-agent' },
     );
 
+    let registered: string[] = [];
     try {
       await client.connect();
       const tools = await registerMcpTools(this.registry, client, {
@@ -134,8 +177,9 @@ export class McpClientRuntime {
           console.warn(`[mcp] server「${spec.name}」缺少白名单工具：${missing.join(', ')}`);
         },
       });
+      registered = tools;
       if (!tools.length) throw new Error('names 白名单没有匹配到任何工具');
-      this.clients.push(client);
+      this.clients.set(spec.name, client);
       status.state = 'ready';
       status.tools = tools;
       status.toolCount = tools.length;
@@ -143,6 +187,8 @@ export class McpClientRuntime {
       // 增量回填：一个 server 慢/挂不影响其它 server 的工具先可用。
       this.onTools(this.statuses.flatMap((s) => s.tools));
     } catch (e) {
+      // 注册到一半失败时不能把半截工具留在 Registry（状态里也没它们，模型却看得到）。
+      for (const name of registered) this.registry.unregister(name);
       await client.close().catch(() => {});
       status.state = 'error';
       status.error = redactSecret(e instanceof Error ? e.message : String(e), spec.token);
