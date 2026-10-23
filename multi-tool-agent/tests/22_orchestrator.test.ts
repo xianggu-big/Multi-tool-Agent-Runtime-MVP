@@ -170,7 +170,12 @@ test('22b) 预筛：提取主题 & 列举顶层目录（忽略依赖/隐藏目�
 
 test('22c) 契约自校验：内置三个 spec 与工具表完全一致（0 error）', () => {
   const registry = buildRegistry();
-  const issues = validateSpecs(SUB_AGENT_SPECS, TOOL_PERMISSION, registry.names(), { maxStepsHardLimit: 20 });
+  const policy = registry.policySnapshot();
+  const issues = validateSpecs(SUB_AGENT_SPECS, TOOL_PERMISSION, registry.names(), {
+    maxStepsHardLimit: 20,
+    toolPermissionByName: policy.permissions,
+    toolRiskLevel: policy.riskLevels,
+  });
   const errors = issues.filter((i) => i.level === 'error');
   assert.deepEqual(errors, [], `契约不应有 error，实际: ${JSON.stringify(errors)}`);
   assert.ok(listSpecIds().length >= 3);
@@ -178,23 +183,33 @@ test('22c) 契约自校验：内置三个 spec 与工具表完全一致（0 erro
 
 test('22d) 契约自校验能抓出「权限超集」（偷偷提权）与「工具未注册」', () => {
   const registry = buildRegistry();
+  const policy = registry.policySnapshot();
   const bad: SubAgentSpec = {
     ...SUB_AGENT_SPECS[0],
     id: 'bad-spec',
     tools: ['dir_stats', 'submit_finding', 'run_tests'], // run_tests 未声明权限 + 权限超集
     permissions: ['misc:read', 'agent:report', 'codebase:test', 'research:web'],
   };
-  const issues = validateSpecs([bad], TOOL_PERMISSION, registry.names(), {});
+  const issues = validateSpecs([bad], TOOL_PERMISSION, registry.names(), {
+    toolPermissionByName: policy.permissions,
+    toolRiskLevel: policy.riskLevels,
+  });
   const msgs = issues.map((i) => i.message).join(' | ');
   assert.match(msgs, /权限超集/);
   assert.ok(!getSpec('bad-spec'));
 
   const missingTool: SubAgentSpec = { ...SUB_AGENT_SPECS[0], id: 'x', tools: ['dir_stats', 'submit_finding', 'not_registered'] };
-  const issues2 = validateSpecs([missingTool], TOOL_PERMISSION, registry.names(), {});
+  const issues2 = validateSpecs([missingTool], TOOL_PERMISSION, registry.names(), {
+    toolPermissionByName: policy.permissions,
+    toolRiskLevel: policy.riskLevels,
+  });
   assert.ok(issues2.some((i) => i.level === 'error' && /工具未注册/.test(i.message)));
 
   const noReport: SubAgentSpec = { ...SUB_AGENT_SPECS[0], id: 'y', tools: ['dir_stats'], permissions: ['misc:read'] };
-  const issues3 = validateSpecs([noReport], TOOL_PERMISSION, registry.names(), {});
+  const issues3 = validateSpecs([noReport], TOOL_PERMISSION, registry.names(), {
+    toolPermissionByName: policy.permissions,
+    toolRiskLevel: policy.riskLevels,
+  });
   assert.ok(issues3.some((i) => /缺少终结性上报工具/.test(i.message)));
 });
 

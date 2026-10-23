@@ -66,6 +66,9 @@ export class Tracer {
   private n = 0;
   /** spanId -> startTs，用于 finish 时计算精确耗时 */
   private open = new Map<string, number>();
+  /** 高频增量合并缓冲：key = runId + spanId + channel。 */
+  private deltaBuffer = new Map<string, { runId: string; spanId: string; channel: 'reasoning' | 'content' | 'tool_call'; text: string }>();
+  private deltaTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(logger: EventLogger) {
     this.logger = logger;
@@ -101,6 +104,8 @@ export class Tracer {
 
   /** 结束一个 span，emit 完成/失败事件，返回 durationMs */
   finish(runId: string, spanId: string, kind: TraceSpanKind, opts: FinishSpanOpts = {}): number {
+    // 先吐完该 span 的增量，再发 model_completed，保证前端不会把迟到文本画到已结束卡片后面。
+    if (kind === 'llm') this.flushDeltas(spanId);
     const startTs = this.open.get(spanId);
     this.open.delete(spanId);
     const endTs = this.now();
@@ -131,12 +136,43 @@ export class Tracer {
    * 高频调用（每秒数十次），必须保持 O(1)，因此不做任何 I/O。
    */
   delta(runId: string, spanId: string, channel: 'reasoning' | 'content' | 'tool_call', text: string): void {
-    this.logger.emit(
-      runId,
-      'llm_delta',
-      { spanId, kind: 'llm', channel, text },
-      { persist: false },
-    );
+    if (!text) return;
+    const key = `${runId}\u0000${spanId}\u0000${channel}`;
+    const prev = this.deltaBuffer.get(key);
+    if (prev) prev.text += text;
+    else this.deltaBuffer.set(key, { runId, spanId, channel, text });
+    if (!this.deltaTimer) {
+      this.deltaTimer = setTimeout(() => {
+        this.deltaTimer = null;
+        this.flushDeltas();
+      }, 24);
+      this.deltaTimer.unref?.();
+    }
+  }
+
+  /** 合并并发送增量；传 spanId 时只清该 span，避免模型结束事件插到旧增量前面。 */
+  private flushDeltas(spanId?: string): void {
+    if (!this.deltaBuffer.size) {
+      if (!spanId && this.deltaTimer) {
+        clearTimeout(this.deltaTimer);
+        this.deltaTimer = null;
+      }
+      return;
+    }
+    if (!spanId && this.deltaTimer) {
+      clearTimeout(this.deltaTimer);
+      this.deltaTimer = null;
+    }
+    for (const [key, item] of this.deltaBuffer) {
+      if (spanId && item.spanId !== spanId) continue;
+      this.deltaBuffer.delete(key);
+      this.logger.emit(
+        item.runId,
+        'llm_delta',
+        { spanId: item.spanId, kind: 'llm', channel: item.channel, text: item.text },
+        { persist: false },
+      );
+    }
   }
 
   /** 通用临时事件（只推实时通道，不落盘） */
@@ -146,6 +182,7 @@ export class Tracer {
 
   /** 强制落盘（run 收尾 / 服务退出 / 测试读取前） */
   flush(): void {
+    this.flushDeltas();
     this.logger.flush();
   }
 }

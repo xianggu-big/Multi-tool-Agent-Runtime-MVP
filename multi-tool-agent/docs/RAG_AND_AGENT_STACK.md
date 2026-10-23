@@ -18,7 +18,7 @@
 | transport 有几种 | **stdio**、**Streamable HTTP**（JSON 或 SSE 响应，客户端真流式解析并回传 `Mcp-Session-Id`）；旧版 HTTP+SSE 已弃用；**没有 WebSocket 标准传输** | `src/mcp/transport.ts`；测试 44f |
 | tool schema 怎么写、并行调用、tool_choice | JSON Schema 放进 `function.parameters`；`parallel_tool_calls` 控制同轮多调用；`tool_choice` 取 auto/none/required/指定函数 | `src/llm/OpenAIProvider.ts`、`src/types.ts`；测试 46a-46c |
 | 一次回答变慢怎么定位、token 花在哪 | 看 **wall vs busy(union)**、模型/工具 sum vs union、首 token、按 step 的 token 热点 | `src/observability/latency.ts`；`GET /api/runs/:id/diagnosis`；测试 45a/45b |
-| 流式打字机、中断怎么处理 | SSE 推 `llm_delta`，前端逐字 append；`Last-Event-ID` 回放 + 心跳 + 看门狗；`/cancel` 走 AbortSignal | `src/server.ts`、`docs/STREAMING_LIVE_VIEW.md` |
+| 流式打字机、中断怎么处理 | SSE 推 `llm_delta`；Tracer 按 24ms 合并、前端跳过增量事件并增量 append，事件流限 500 条、滚动 10fps；`Last-Event-ID` 回放 + 心跳 + 看门狗；`/cancel` 走 AbortSignal | `src/trace/Tracer.ts`、`public/index.html`、`docs/STREAMING_LIVE_VIEW.md` |
 | 什么时候用 LangGraph | 有环/条件边、检查点恢复、图内人工中断、多 Agent 共享状态时；线性单 Agent 手写更透明 | `src/runtime/frameworkChoice.ts`；测试 47a |
 | 什么时候微调而不是 RAG | 知识易变/要引用 → RAG；稳定行为/格式且 ≥100~500 条标注 → LoRA；两者都要 → RAG+LoRA | `src/llm/adaptation.ts`；测试 47b |
 | vLLM 显存怎么估、INT8 掉多少精度 | 权重 + KV + 激活（乘并发）+ 开销；量化主要省权重、不省 KV。**INT8 精度本仓未实测**，必须按任务评测集测 | `src/llm/vram.ts`；测试 47c |
@@ -338,12 +338,13 @@ const tool: ToolDefinition = {
 ### 7.1 数据通路
 
 ```text
-Provider 流式增量 → Tracer.delta(llm_delta, ephemeral)
-  → SSE /api/runs/:id/stream → 前端逐字 append
+Provider 流式增量 → Tracer.delta(按 span/channel 合并 ~24ms → llm_delta, ephemeral)
+  → SSE /api/runs/:id/stream → 前端 requestAnimationFrame 增量 append（不复制进事件流）
   → 同时在内存聚合 reasoning/content 预览，随 model_completed 落盘
 ```
 
 - `llm_delta` 的 `seq=0`、`ephemeral=true`，**不落盘**，避免高频文本写爆 SQLite。
+- 服务端按 `spanId + channel` 合并增量，并在 `model_completed` 前 flush；前端事件流跳过 `llm_delta`、节点上限 500，文本缓冲上限 30000 字符——这是“画面突然卡死”事故后的渲染背压策略。
 - 断线重连只能看到 `model_completed.outputs.{reasoningPreview,contentPreview}` 的聚合预览，不能逐字重放；这是明确取舍。
 - `tool_call` 通道在首帧就推给前端，用于提前渲染工具卡片骨架。
 

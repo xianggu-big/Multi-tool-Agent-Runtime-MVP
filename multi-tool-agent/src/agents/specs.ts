@@ -282,10 +282,17 @@ export function validateSpecs(
   specs: SubAgentSpec[],
   toolPermission: Record<string, string>,
   registeredTools: string[],
-  opts: { maxStepsHardLimit?: number } = {},
+  opts: {
+    maxStepsHardLimit?: number;
+    /** 注册表中的真实权限；优先于静态工具表，覆盖运行时注册的 MCP 等动态工具。 */
+    toolPermissionByName?: Record<string, string>;
+    /** 注册表中的真实风险等级，用于校验 spec.maxRiskLevel。 */
+    toolRiskLevel?: Record<string, RiskLevel>;
+  } = {},
 ): SpecIssue[] {
   const issues: SpecIssue[] = [];
   const hardLimit = opts.maxStepsHardLimit ?? 20;
+  const riskOrder: Record<RiskLevel, number> = { safe: 0, low: 1, medium: 2, high: 3 };
 
   for (const spec of specs) {
     // ① 工具必须已注册
@@ -295,7 +302,23 @@ export function validateSpecs(
       }
     }
     // ② 权限必须恰好等于工具所需权限的并集（不能多 = 偷偷提权；不能少 = 跑不起来）
-    const required = new Set(spec.tools.map((t) => toolPermission[t]).filter(Boolean) as string[]);
+    const required = new Set<string>();
+    for (const t of spec.tools) {
+      const permission = opts.toolPermissionByName?.[t] ?? toolPermission[t];
+      if (!permission) {
+        issues.push({ specId: spec.id, level: 'error', message: `工具未声明权限映射: ${t}` });
+      } else {
+        required.add(permission);
+      }
+      const risk = opts.toolRiskLevel?.[t];
+      if (risk && riskOrder[risk] > riskOrder[spec.maxRiskLevel]) {
+        issues.push({
+          specId: spec.id,
+          level: 'error',
+          message: `工具风险等级越界: ${t} 为 ${risk}，超过 spec.maxRiskLevel=${spec.maxRiskLevel}`,
+        });
+      }
+    }
     const declared = new Set(spec.permissions);
     for (const p of required) {
       if (!declared.has(p)) {

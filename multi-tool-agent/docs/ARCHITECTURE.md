@@ -110,6 +110,7 @@
 ### 2.5f 流式展示链路（`onDelta → llm_delta → SSE`）
 - `LLMProvider.chat(req, onDelta?, signal?)`：可选增量回调 + 取消信号。`MockProvider` 把思考/正文按 `STREAM_CHUNK_CHARS` 分片（延迟可配，测试为 0）；`OpenAIProvider` 带 `stream:true` 走 SSE 解析（`accumulateOpenAIStreamChunk` 为可单测纯函数，**真实供应商未联调**）。
 - `AgentRuntime.loopBody`：按 `input.stream.liveDeltas ?? config.stream.liveDeltas` 决定是否传入 `onDelta`；**关闭时不产生任何增量事件（零额外开销）**。同时把增量在内存聚合为 `reasoningPreview` / `contentPreview`（各 1200 字符上限）写入 `model_completed.outputs`，供断线/事后回看还原。
+- `Tracer.delta` 按 `runId + spanId + channel` 缓冲约 24ms 再合并发送，并在 `model_completed` 前强制 flush；高频逐字帧不再一对一打穿 SSE 和浏览器主线程。前端跳过把 `llm_delta` 复制进事件流，事件节点上限 500，文本按新增片段追加，自动滚动 10fps 节流。
 - `src/server.ts` SSE 端点三段式：① 先订阅 `LiveHub`（避免空窗）→ ② 同步回放持久化事件（支持 `Last-Event-ID` / `?fromSeq=`）→ ③ 心跳（15s）+ 看门狗（2s，补漏 + 终态收尾）；`ephemeral` 帧不写 `id:`，因此不参与断线续传。
 - `GET /api/stream/stats` 暴露 `activeStreams / ephemeralEvents / pendingPersistence` 便于现场诊断。
 

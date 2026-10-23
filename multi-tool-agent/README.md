@@ -37,7 +37,7 @@ npm start
 npm run smoke:stream
 # 9) 可选评测（编辑管线需 Docker；红队不需要 Key）
 npm run eval:edit          # 7 个编辑管线场景 → reports/EDIT_EVAL.md
-npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000  # 20 条真实模型任务（需 Docker + DEEPSEEK_API_KEY，约 $0.02）→ reports/EDIT_EVAL_REAL.md
+npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000  # 26 条真实模型任务（20 引导 + 4 盲测 + 2 多文件；需 Docker + DEEPSEEK_API_KEY，约 $0.03）→ reports/EDIT_EVAL_REAL.md
 npm run eval:compaction    # 上下文压缩 A/B（30 run；需 DEEPSEEK_API_KEY，约 $0.03）→ reports/COMPACTION_AB.md
 npm run security:redteam   # 42 条注入样本 → reports/INJECTION_REDTEAM.md
 npm run digest:list         # 每次 run 的复盘摘要（成功也记；默认只看有问题的）
@@ -53,7 +53,7 @@ npm run digest:list         # 每次 run 的复盘摘要（成功也记；默认
 > # 用你实际要运行的那个 Node 来执行；PowerShell 里直接敲即可
 > rm -rf node_modules/better-sqlite3/build
 > npm rebuild better-sqlite3
-> npm test          # 应 416/416 通过
+> npm test          # 应 422/422 通过
 > ```
 > 上面删不掉或重建仍失败时，用强制重装：
 > ```bash
@@ -269,13 +269,14 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/RAG_ABLATION.md` —— **RAG 消融**（生成物）：chunk 大小/overlap 与 embedding 维度对 Recall/MRR/nDCG/存储的影响；`npm run rag:ablation`。
 - `reports/COMPACTION_AB.md` —— **上下文压缩 A/B**（生成物）：rolling vs legacy 的 30 run 真实模型对照、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论是 `not_proven`，不要外推成“滚动摘要更优”。
 - `reports/EDIT_EVAL.md` —— **编辑管线评测**（生成物）：真 Docker + 真审批 + 真落盘 + 宿主复验/回滚，7 个确定性场景；`npm run eval:edit`。**注意：衡量管线，不是模型编辑智力**。
-- `reports/EDIT_EVAL_REAL.md` —— **真实模型编辑评测**（生成物）：20 条单文件小任务，Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；当前 **20/20（L2 20/20）**、611,890 tokens / $0.0172，单轮 95% Wilson 下界 **83.9%**；逐任务脱敏证据在 `reports/EDIT_EVAL_REAL_EVIDENCE.json`。`npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`。**只覆盖小函数级修改，不外推大型重构**。
+- `reports/EDIT_EVAL_REAL.md` —— **真实模型编辑评测**（生成物）：26 条任务（20 引导 + 4 盲测 + 2 多文件），Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；当前 **26/26（L2 26/26）**、833,082 tokens / $0.0248，单轮 95% Wilson 下界 **87.1%**；逐任务脱敏证据在 `reports/EDIT_EVAL_REAL_EVIDENCE.json`。`npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000`。**不外推大型重构或需要人工澄清的需求**。
 - `reports/INJECTION_REDTEAM.md` —— **提示注入红队评测**（生成物）：42 条恶意/正常/已知缺口样本；当前恶意检出 20/22、正常误报 2/20；`npm run security:redteam`。**是启发式降风险，不是防住注入**。
 - `reports/PROVIDER_BENCHMARK.md` —— **Provider 横评**（人写）：DeepSeek 已实测，其余家有 Key 再补测回填。
 - `reports/ZCODE_COMPARISON.md` —— **对标分析与优化路线**（人写）：沿用「机制 / 对比 / 建议 / 顺序」四段式。
 - `reports/runs/` —— **单 run 报告**（生成物，**不进 git**）：每个 run 一份 `reports/runs/<runId>.md`（Mermaid 流程图 + 分层量化 + 六阶段归因）+ `INDEX.md`；`npm run report:run -- <runId>|--all`；HTTP 同源 `GET /api/runs/:id/report`。
 - `reports/PROGRESS_2026-10-16.md` —— **进度快照**（一次性，非维护文档）：某一时点的模块完成状态 / 进行中 / 阻塞与风险分级；后续快照按需追加。
 - `reports/RUN_REVIEW_2026-10-16.md` —— **运行核查报告**（一次性）：某段实测会话的「agent 说法 vs 数据记录」逐条判定（127 项 / `*.html` 0 命中 / 写通道 / "委派虚构"质疑的核查 + 证据索引）。
+- `reports/HEALTH_CHECK_2026-10-23.md` —— **全身检查报告**（一次性）：初始门禁基线（416/416）、权限矩阵、问题清单与修复状态（P0 门禁/卡死已修，P1 MCP 主路径配置仍未接）、MCPHub 环境实测。
 - 改完代码请跑：`npm run report:refresh`（重新生成 **Agent 报告 + 参数台账 + 子 Agent 契约文档**）；跑了真实 run 或改了报告渲染后可 `npm run report:run -- --all`（重生 `reports/runs/`）；改了写路径/沙箱/审批后跑 `npm run eval:edit`（需 Docker，约 80s）；改了注入特征或安全边界后跑 `npm run security:redteam`（无需 Key）。
 
 - `docs/ARCHITECTURE.md` —— 架构、模块职责、真实 Agent Loop 流程、Tool Registry 安全边界、状态机与恢复、已知缺陷。

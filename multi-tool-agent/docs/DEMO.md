@@ -1,7 +1,7 @@
 # 演示闭环（DEMO）
 
 > 目标：让第一次打开项目的人，在 **10 分钟内**走完一条可验证的主路径，并知道每一步「应该看到什么」。
-> 本文数字来自本机实跑：命令行/HTTP 为 **2026-10-21 ~ 10-22**（Mock，内存库）；全量测试为 **62 文件 / 416 子测试 / 416 通过 / 0 跳过**。
+> 本文数字来自本机实跑：命令行/HTTP 为 **2026-10-21 ~ 10-23**（Mock，内存库）；全量测试为 **63 文件 / 422 子测试 / 422 通过 / 0 跳过**。
 > 真实模型效果不在这里编造，统一看 `reports/AGENT_REPORT.md`（从 `data/runtime.db` 生成）。
 
 ---
@@ -142,7 +142,7 @@ SSE 实时流：`GET /api/runs/:id/stream`（事件类型见 `docs/STREAMING_LIV
 ```bash
 node scripts/sandbox/build-image.mjs
 npm run eval:edit        # 7 个确定性场景，产物 reports/EDIT_EVAL.md
-npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000  # 20 条真实模型任务 → reports/EDIT_EVAL_REAL.md（约 $0.02）
+npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000  # 26 条真实模型任务（20 引导 + 4 盲测 + 2 多文件）→ reports/EDIT_EVAL_REAL.md（约 $0.03）
 ```
 
 界面演示：
@@ -155,7 +155,7 @@ npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000  # 20 �
 
 预期：`npm run eval:edit` 本轮（2026-10-22）重跑 **7/7** 命中预期（5 次审批 / 4 文件落盘 / 1 回滚；平均 12.7s / P95 14.1s）。改 Docker 相关代码后仍需重跑。
 
-真实模型层：`eval:edit:real` 最近一次为 **20/20 通过、L2 20/20、611,890 tokens / $0.0172 / 平均 23.9s**（DeepSeek Flash）。它只覆盖单文件小函数级修改，不能说成“模型能重写项目”。
+真实模型层：`eval:edit:real` 最近一次为 **26/26 通过、L2 26/26、833,082 tokens / $0.0248 / 平均 22.7s**（DeepSeek Flash）；其中盲测 4/4、多文件 2/2。它仍不覆盖大型重构或需要人工澄清的模糊需求。
 
 ---
 
@@ -179,13 +179,13 @@ LLM_MODE=openai LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=... npm start
 
 | 命令 | 产物 |
 |---|---|
-| `npm test` | 416 子测试全绿（含 Docker 用例时 0 跳过） |
+| `npm test` | 422 子测试全绿（含 Docker 用例时 0 跳过） |
 | `npm run agents:lint` | 契约自校验 / 文档漂移 / 工具存在性 |
 | `npm run report:refresh` | `reports/{AGENT_REPORT,PARAMETERS}.md`、`agents/*.md` |
 | `npm run rag:bench` | `reports/RAG_EVAL.md` |
 | `npm run rag:ablation` | `reports/RAG_ABLATION.md` |
 | `npm run eval:edit` | `reports/EDIT_EVAL.md`（需 Docker） |
-| `npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000` | `reports/EDIT_EVAL_REAL.md`（需 Docker + DEEPSEEK_API_KEY，约 $0.02） |
+| `npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000` | `reports/EDIT_EVAL_REAL.md`（需 Docker + DEEPSEEK_API_KEY，约 $0.03） |
 | `npm run eval:compaction` | `reports/COMPACTION_AB.md`（需真实 Key，约 $0.03） |
 | `npm run security:redteam` | `reports/INJECTION_REDTEAM.md` |
 | `npm run digest:list` | 最近 run 的复盘（默认只看有问题的） |

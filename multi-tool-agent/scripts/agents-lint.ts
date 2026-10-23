@@ -15,10 +15,15 @@ import { TOOL_PERMISSION } from '../src/runtime/AgentRuntime.js';
 
 const config = loadConfig();
 const registry = buildRegistry();
+const policy = registry.policySnapshot();
 let failed = 0;
 
 // ① 契约自校验
-const issues = validateSpecs(SUB_AGENT_SPECS, TOOL_PERMISSION, registry.names(), { maxStepsHardLimit: 20 });
+const issues = validateSpecs(SUB_AGENT_SPECS, TOOL_PERMISSION, registry.names(), {
+  maxStepsHardLimit: 20,
+  toolPermissionByName: policy.permissions,
+  toolRiskLevel: policy.riskLevels,
+});
 for (const issue of issues) {
   const tag = issue.level === 'error' ? '✗' : '⚠';
   console.log(`  ${tag} [${issue.specId}] ${issue.message}`);

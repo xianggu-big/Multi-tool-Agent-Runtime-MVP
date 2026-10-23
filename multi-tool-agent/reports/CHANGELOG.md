@@ -76,6 +76,41 @@
 
 ---
 
+## 2026-10-23
+
+### 契约门禁真实化 + 流式渲染防卡死 + 编辑评测扩到盲测/多文件
+
+**昨天遗留**：`411a72b` 的远端 CI 在 `npm test` 红了一次且拿不到登录态日志；真实编辑评测虽然 20/20，但题目点名文件/函数、只覆盖单文件，可信度被测试设计放大。今天先把“文档说管住了、实现没校验”的门禁缺口补上，再把评测扩到盲测和多文件。
+
+- **P0 契约门禁**：`ToolRegistry.policySnapshot()` 提供已注册工具的真实 permission/risk；`validateSpecs()` 优先读取它，工具查不到权限映射直接 `error`，并新增 `spec.maxRiskLevel` 越界校验。`resolvePermissions()` 也改为读注册表，动态注册的 MCP 工具不再被静态表静默漏掉。回归 `tests/62a~62c`。
+- **P0 流式卡死**：`Tracer.delta` 按 `runId + spanId + channel` 合并约 24ms，并在 `model_completed` 前 flush；前端不再把 `llm_delta` 复制进事件流，事件节点上限 500，文本按新增片段 append，自动滚动 100ms 节流，卡片启用 `content-visibility:auto`。回归 `tests/59d`、`tests/63a/63b`。
+- **编辑评测真实性**：新增 R21~R24 盲测（只给用户症状，不点名文件/函数）与 R25~R26 多文件（抽取邮箱模块、搬迁 clamp 并保留原导入路径）；报告按引导/盲测/多文件分组，证据 schema 升到 v2。
+
+**实测**（`deepseek-flash`，证据 `data/edit-eval-real/20261023-121200-802/`）：**26/26 通过，L2 26/26**；引导 20/20、盲测 4/4、多文件 2/2；**833,082 tokens / $0.0248 / 平均 22.7s / P95 29.2s**；单轮 95% Wilson 下界 **87.1%**。自动审批仍只衡量“模型能否改对”，不代表人工审批体验；仍不覆盖大型重构或 HTTP/UI 人工审批全链路。
+
+**验证**：`npm run typecheck` 0 错误；`npm run agents:lint` 三项通过；`npm test` **63 文件 / 422 子测试 / 422 通过 / 0 失败 / 0 跳过 / 约 17s**；Linux `node:24` 容器等价 CI 复跑通过（Docker 用例按设计 skip）。
+
+### 全身检查报告（只读，未改代码）
+
+**背景**：准备接 MCP 之前，需要对「权限 / 契约门禁 / 工具池 / 文档漂移」做一次系统体检，并把问题与建议改动交给后续 code agent。
+
+**产出**（只新增文档，**零代码改动**）：
+
+- 新增 `reports/HEALTH_CHECK_2026-10-23.md`：门禁基线 + 权限矩阵（22 工具逐条比对）+ 问题清单 + 建议改动与验收方法 + MCPHub 环境实测。
+- 同时登记进 `README.md §7` 与 `PROJECT_REPORT.md §8` 两处文档地图。
+
+**主要发现**：
+
+- **P0**：`validateSpecs` 用 `toolPermission[t]` 后 `.filter(Boolean)`，导致「表里没有的工具」**静默跳过**权限校验；接 MCP（动态工具名）后构建期门禁会完全失效。
+- **P0**：`SubAgentSpec.maxRiskLevel` 只声明不校验（仅渲染进文档），`safe` 的 spec 塞 `high` 工具 `agents:lint` 仍全绿。
+- **P0**（追加排查）：**画面突然卡死、恢复后一次性补出大量内容** —— 服务端未停，是浏览器主线程被渲染任务占满：`addEvent` 对每条 `llm_delta` 都 append 后强制 `scrollTop=scrollHeight`；`flushCards` 每帧整段重写最多 3 万字符并再强制布局整个 `#live`；`_buf` 只增不减。
+- **P1**：`registerMcpTools()` 只在测试中被调用，主路径无配置入口（能力在、产品路径不在）。
+- **P2**：README §2 工具表漂移（缺 `knowledge_search` / `ask_user`）；`codebase:write` 粒度过粗；工具池定义三处并存。
+
+**验证**：`npm run typecheck` 0 错误；`npm run agents:lint` 三项全过；`npm test` **416/416 通过、0 跳过、0 失败（24.9s）**。未跑真实模型 / `eval:*` / 前端浏览器实测。
+
+---
+
 ## 2026-10-22
 
 ### 真实模型编辑评测：20/20（终点 A 第 3 条）

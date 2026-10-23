@@ -1,4 +1,4 @@
-// scripts/edit-eval-real.ts — 真实模型编辑评测（20 条小任务）
+// scripts/edit-eval-real.ts — 真实模型编辑评测（26 条：20 引导 + 4 盲测 + 2 多文件）
 //
 // 与 eval:edit 的分工：
 //   - eval:edit        = 确定性管线（脚本扮演模型），tokens=0，证明「门禁/审批/回滚」可靠；
@@ -7,7 +7,7 @@
 // 每条任务：复制独立 fixture → 注入一个缺陷（或要求新增能力）→ 真实 code-edit 子 Agent 在
 // Docker 沙箱里改 → 自动审批放行 → 落盘 → 宿主跑 4 个测试文件 → 断言目标文件内容。
 //
-// 运行：npm run eval:edit:real [-- --tasks=20 --budget-usd=1 --timeout-ms=240000]
+// 运行：npm run eval:edit:real [-- --tasks=26 --budget-usd=1 --timeout-ms=240000]
 // 产物：reports/EDIT_EVAL_REAL.md + data/edit-eval-real/<stamp>/
 
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -33,6 +33,8 @@ interface Task {
   id: string;
   title: string;
   goal: string;
+  /** guided = 明确点名文件/函数；blind = 只给症状；multi_file = 需要跨文件抽取/搬迁。 */
+  category?: 'guided' | 'blind' | 'multi_file';
   setup?: Array<{ path: string; find: string; replace: string }>;
   expect: Array<{ path: string; includes?: string; notIncludes?: string; regex?: string }>;
 }
@@ -175,6 +177,59 @@ const TASKS: Task[] = [
     goal: '把 src/arrays.ts 的 sum 参数类型从 number[] 改为 readonly number[]；行为不变，测试必须仍全绿。',
     expect: [{ path: 'src/arrays.ts', includes: 'readonly number[]' }],
   },
+  {
+    id: 'R21',
+    title: '盲测：修复数字区间夹取漏掉上限',
+    category: 'blind',
+    goal: '用户反馈：有一段“把数字限制在区间内”的工具，遇到高于上限的值会原样漏出去。请从现有源码和测试定位问题并修复，不要改测试。',
+    setup: [{ path: 'src/calc.ts', find: 'return Math.min(max, Math.max(min, n));', replace: 'return Math.max(min, n);' }],
+    expect: [{ path: 'src/calc.ts', regex: 'Math\\.min\\(max[\\s\\S]{0,80}Math\\.max\\(min' }],
+  },
+  {
+    id: 'R22',
+    title: '盲测：修复年龄上限与错误文案不一致',
+    category: 'blind',
+    goal: '用户资料校验目前会把明显超龄的年龄当成合法值，但错误文案仍声称有上限。请定位并修复到与现有文案和测试一致，不要改测试。',
+    setup: [{ path: 'src/validate.ts', find: 'input.age > 150', replace: 'input.age > 200' }],
+    expect: [{ path: 'src/validate.ts', regex: 'age\\s*>\\s*150' }],
+  },
+  {
+    id: 'R23',
+    title: '盲测：修复 URL slug 里残留空格',
+    category: 'blind',
+    goal: '把带空格的标题转成 URL slug 后，结果里仍保留空格，链接不可用。请定位并修复，同时保留现有的大小写与首尾空白处理，不要改测试。',
+    setup: [{ path: 'src/strings.ts', find: ".replace(/\\s+/g, '-')", replace: ".replace(/\\s+/g, ' ')" }],
+    expect: [{ path: 'src/strings.ts', regex: "replace\\(/\\\\s\\+/g,\\s*'-'\\)" }],
+  },
+  {
+    id: 'R24',
+    title: '盲测：修复短文本被追加省略号',
+    category: 'blind',
+    goal: '用户反馈文本截断功能会在本来不需要截断的短文本末尾也追加省略号。请定位并修复，行为与现有测试一致，不要改测试。',
+    setup: [{ path: 'src/strings.ts', find: "return s.length <= max ? s : s.slice(0, max) + '…';", replace: "return s.slice(0, max) + '…';" }],
+    expect: [{ path: 'src/strings.ts', regex: 's\\.length\\s*<=\\s*max' }],
+  },
+  {
+    id: 'R25',
+    title: '多文件：抽取邮箱校验模块',
+    category: 'multi_file',
+    goal: '把用户邮箱校验抽到新的独立模块 src/email.ts，导出 isValidEmail(s: string): boolean；validateUser 改为调用该函数。保持错误文案、现有测试和原导出行为不变。',
+    expect: [
+      { path: 'src/email.ts', regex: 'export function isValidEmail\\s*\\(' },
+      { path: 'src/validate.ts', regex: "from\\s+['\"]\\./email(?:\\.js)?['\"]" },
+    ],
+  },
+  {
+    id: 'R26',
+    title: '多文件：搬迁 clamp 并保持原导入路径',
+    category: 'multi_file',
+    goal: '把数字区间夹取函数实现搬到新的 src/math.ts，并从原模块继续导出同名函数，确保调用方仍能从原路径导入，现有测试全绿。',
+    expect: [
+      { path: 'src/math.ts', regex: 'export function clamp\\s*\\(' },
+      { path: 'src/calc.ts', regex: "from\\s+['\"]\\./math(?:\\.js)?['\"]" },
+      { path: 'src/calc.ts', regex: 'export\\s*\\{[^}]*clamp|export\\s+\\{[^}]*clamp[^}]*\\}' },
+    ],
+  },
 ];
 
 function arg(name: string): string | undefined {
@@ -276,6 +331,7 @@ function checkExpect(repo: string, task: Task): Array<{ ok: boolean; detail: str
 interface TaskResult {
   id: string;
   title: string;
+  category: 'guided' | 'blind' | 'multi_file';
   status: 'passed' | 'failed' | 'invalid';
   applied: string[];
   approvals: number;
@@ -337,7 +393,7 @@ async function main(): Promise<void> {
   for (const task of tasks) {
     if (spent >= budgetUsd) {
       results.push({
-        id: task.id, title: task.title, status: 'failed', applied: [], approvals: 0, hostOk: false, expectOk: false,
+        id: task.id, title: task.title, category: task.category ?? 'guided', status: 'failed', applied: [], approvals: 0, hostOk: false, expectOk: false,
         steps: 0, modelCalls: 0, toolCalls: 0, tokens: 0, costUsd: 0, wallMs: 0,
         failure: `预算用尽（$${spent.toFixed(4)} >= $${budgetUsd}）`, notes: [],
       });
@@ -353,7 +409,7 @@ async function main(): Promise<void> {
     if (setup.missed.length) {
       // 缺陷没注入成功 → 任务无效，不能算通过（否则模型看到的是正确代码）
       results.push({
-        id: task.id, title: task.title, status: 'invalid', applied: [], approvals: 0, hostOk: false, expectOk: false,
+        id: task.id, title: task.title, category: task.category ?? 'guided', status: 'invalid', applied: [], approvals: 0, hostOk: false, expectOk: false,
         steps: 0, modelCalls: 0, toolCalls: 0, tokens: 0, costUsd: 0, wallMs: Date.now() - started,
         failure: `setup 未命中：${setup.missed.join('; ')}`, notes: setupNotes,
       });
@@ -427,6 +483,7 @@ async function main(): Promise<void> {
     results.push({
       id: task.id,
       title: task.title,
+      category: task.category ?? 'guided',
       status: host.ok && expectOk ? 'passed' : 'failed',
       applied,
       approvals: approvals.length,
@@ -456,6 +513,16 @@ async function main(): Promise<void> {
   const hostPass = valid.filter((r) => r.hostOk).length;
   const passRate = passed / Math.max(1, valid.length);
   const lower = wilsonLowerBound(passed, valid.length);
+  const categories: Array<{ id: 'guided' | 'blind' | 'multi_file'; label: string }> = [
+    { id: 'guided', label: '引导（点名文件/函数）' },
+    { id: 'blind', label: '盲测（只给症状）' },
+    { id: 'multi_file', label: '多文件（抽取/搬迁）' },
+  ];
+  const categoryStats = categories.map((c) => {
+    const rows = valid.filter((r) => r.category === c.id);
+    const ok = rows.filter((r) => r.status === 'passed').length;
+    return { ...c, total: rows.length, passed: ok };
+  });
   const avgSteps = results.reduce((a, r) => a + r.steps, 0) / Math.max(1, results.length);
   const avgModelCalls = results.reduce((a, r) => a + r.modelCalls, 0) / Math.max(1, results.length);
   const avgToolCalls = results.reduce((a, r) => a + r.toolCalls, 0) / Math.max(1, results.length);
@@ -480,6 +547,9 @@ async function main(): Promise<void> {
   lines.push(`| P95 耗时 | ${(p95Ms / 1000).toFixed(1)}s |`);
   lines.push(`| 平均步骤 / 模型调用 / 工具调用 | ${avgSteps.toFixed(1)} / ${avgModelCalls.toFixed(1)} / ${avgToolCalls.toFixed(1)} |`);
   lines.push(`| 每题平均 tokens / 成本 | ${Math.round(totalTokens / Math.max(1, results.length))} / $${(totalCost / Math.max(1, results.length)).toFixed(4)} |`);
+  for (const s of categoryStats) {
+    lines.push(`| ${s.label} | ${s.passed}/${s.total}（${s.total ? ((s.passed / s.total) * 100).toFixed(1) : '0.0'}%） |`);
+  }
   lines.push('', '## 逐条结果', '');
   lines.push('| ID | 任务 | 结果 | 落盘 | 审批 | L2 | 断言 | tokens | 失败原因 |');
   lines.push('|---|---|---|---|---|---|---|---|---|');
@@ -488,24 +558,25 @@ async function main(): Promise<void> {
     lines.push(`| ${r.id} | ${r.title} | ${mark} | ${r.applied.join('<br>') || '—'} | ${r.approvals} | ${r.hostOk ? '✅' : '❌'} | ${r.expectOk ? '✅' : '❌'} | ${r.tokens} | ${(r.failure ?? '').slice(0, 120) || '—'} |`);
   }
   lines.push('', '## 口径与边界', '');
-  lines.push('- 每条任务复制独立 fixture；`setup` 注入的缺陷会让基线测试先失败（R15~R20 是新增/重构任务，不注入缺陷）。');
+  lines.push('- 每条任务复制独立 fixture；`setup` 注入的缺陷会让基线测试先失败（R15~R20、R25~R26 是新增/重构/搬迁任务，不注入缺陷）。');
   lines.push('- 审批是**自动 allow_once**：评测的是模型能否改对，不是人工审批体验；审批次数仍记录。');
   lines.push('- 判定要求同时满足：宿主 4 个测试文件全绿 + `expect` 断言命中。只看「模型说改好了」不算通过。');
   lines.push('- `setup` 未命中的任务标记为 `invalid` 并从分母排除；R11 接受 `size <= 0` 或等价的 `!(size > 0)`，同时要求错误文案含 `size must be > 0`。');
   lines.push('- 成本按 Provider 返回值累计；预算用尽后剩余任务记失败并标原因，不重试。');
   lines.push(`- 单轮 ${results.length} 条，95% Wilson 下界 **${(lower * 100).toFixed(1)}%**；不能把 100% 点估计当成稳定能力，需重复跑与扩样本。`);
-  lines.push('- 只覆盖小函数级修改；不代表大型重构、多文件架构调整或模糊需求。');
+  lines.push('- 引导题明确点名文件/函数；盲测题只给用户症状；多文件题要求新增/搬迁模块。三组成绩分开看，不能只引用总通过率。');
+  lines.push('- 仍不覆盖大型重构、跨服务改动或需要人工澄清的模糊需求。');
 
   const reportPath = join(PROJECT, 'reports', 'EDIT_EVAL_REAL.md');
   writeFileSync(reportPath, lines.join('\n'), 'utf8');
   writeFileSync(join(evidenceDir, 'summary.json'), JSON.stringify({ runStamp, model, results, totals: { passed, totalTokens, totalCost } }, null, 2), 'utf8');
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runStamp,
     model,
     fixture: 'eval/edit-fixture/real/',
     generatedAt: new Date().toISOString(),
-    totals: { tasks: results.length, valid: valid.length, invalid, passed, hostPass, totalTokens, totalCost, passRate, wilson95Lower: lower },
+    totals: { tasks: results.length, valid: valid.length, invalid, passed, hostPass, totalTokens, totalCost, passRate, wilson95Lower: lower, byCategory: categoryStats },
     policy: { approval: 'auto allow_once', scoring: 'host L2 green AND expect checks pass', setupMiss: 'invalid/excluded' },
     results,
   };

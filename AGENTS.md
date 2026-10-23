@@ -3,7 +3,9 @@
 > 本项目代码在 `multi-tool-agent/`（注意：`multi-tool-agent/agents/AGENTS.md` 是**生成的子 Agent 契约文档**，与本文件无关，勿混淆）。
 > 本项目规模较大、自己已有一套文档体系（README / docs / reports），**改动前先读 `multi-tool-agent/reports/PROJECT_REPORT.md`**。
 
-## 当前状态（最后更新 2026-10-22；工程实测基线 2026-10-22 = **61 个测试文件 / 416 子测试 / 416 通过 / 0 失败 / 0 跳过 / 约 20s**；Docker 已启动，`40j` 已补跑通过）
+## 当前状态（最后更新 2026-10-23；工程实测基线 2026-10-23 = **63 个测试文件 / 422 子测试 / 422 通过 / 0 失败 / 0 跳过 / 约 17s**；Docker 已启动，`40j` 已补跑通过）
+
+> **✅ 契约门禁真实化 + 流式防卡死 + 评测扩到盲测/多文件（2026-10-23）**：`ToolRegistry.policySnapshot()` 把已注册工具的真实 permission/risk 交给 `validateSpecs()`，动态工具缺权限映射直接 error，`maxRiskLevel` 真正校验；`resolvePermissions()` 读注册表而非静态表。流式输出服务端按 `spanId+channel` 合并约 24ms，前端跳过 `llm_delta`、事件节点上限 500、文本增量 append、滚动 10fps，修“画面突然卡死”。真实编辑评测扩到 **26 条（20 引导 + 4 盲测 + 2 多文件）**，最新 **26/26（L2 26/26）**，833,082 tokens / $0.0248，单轮 95% Wilson 下界 **87.1%**。回归 `tests/59d`、`tests/62a~62c`、`tests/63a/63b`；全量 **422/422**。残余：自动审批仍是 `allow_once`，未覆盖 HTTP/UI 人工审批全链路；P1 MCP 主路径配置入口未做。
 
 > **📦 GitHub 发布准备（2026-10-21）**：仓库已脱敏并**重写为单一干净提交**（`6d3406e`，243 文件）。排除 `.eval/`（本机实测脚本，含个人绝对路径）、`.agents/`（个人工作流配置）、`reports/runs/`、`*.db`；`.env` / `data/` / `.workbuddy/` / `.zcode/` 从未入库。扫描结果：跟踪文件里无 `xianggu`、无 `C:\Users…`、无 `D:\c学习数据结构…`、无真实密钥（仅 `sk-xxx` 占位）。根 `README.md` = GitHub 首页；`.github/workflows/ci.yml` 保留。**remote 已配置**（`origin` → `github.com/xianggu-big/Multi-tool-Agent-Runtime-MVP`）；远端 CI 曾失败（BF-010：契约文档 CRLF/LF 比较），修复后**终点 A 功能提交 `c12a394`** 的 run `39728277735` **全步骤绿**（npm ci / typecheck / agents:lint / npm test）。未附 LICENSE（默认保留所有权利，需要再补）。
 
@@ -46,7 +48,7 @@
 - 轻量级 Agent Runtime MVP：一套共享 Agent Loop 驱动 codebase / research / misc / orchestrator 四类 Agent；可运行、可测试、可演示，非生产系统。
 
 **已确认的结论与约束（2026-10-15 实机复验）**
-- 工程健康度（2026-10-21 实跑）：`npm run typecheck` 0 错误；`npm test` **61 文件 / 416 子测试 / 416 通过 / 0 跳过 / 0 失败 / 约 35s**（Docker 已启动，`40j` 已补跑通过）；`npm run agents:lint` 三项门禁通过；`npm run report:refresh` 已重生；`eval:edit` **7/7**；4 个 Mock demo 的最近记录仍为 completed。
+- 工程健康度（2026-10-23 实跑）：`npm run typecheck` 0 错误；`npm test` **63 文件 / 422 子测试 / 422 通过 / 0 跳过 / 0 失败 / 约 17s**；`npm run agents:lint` 三项门禁通过；`eval:edit` **7/7**；`eval:edit:real` **26/26**；4 个 Mock demo 的最近记录仍为 completed。
 - M1/M1' 写能力：默认**可用**（`CODEBASE_WRITE_ENABLED` 默认 true，部署可显式 false 整机禁用）；写操作走「本 run 界面显式授权（「允许修改文件」开关 → `allowWriteSpecs`）→ 沙箱阶梯 → 一次批量审批 → 落盘 → 宿主复验（失败自动回滚）」；`code-edit` 是唯一可写 spec。实测四修：快照自引用崩溃 / hostVerify 继承运行期 env 致恒失败回滚 / 分类器被测试名污染 / 容器内套件 2 条平台假设失败——都带回归守卫（40k/40l/39i）。
 - 真实模型（deepseek-flash，Key 来自系统用户级环境变量 `DEEPSEEK_API_KEY`，`.env` 留空即可）：
   - 单 Agent 冒烟通过（2 步 / 1781 tok / $0.00015 / 104 流式帧）。
@@ -68,7 +70,7 @@
 - 红队评测：`multi-tool-agent/eval/security-redteam/corpus.json`（42 条）+ `scripts/injection-redteam.ts` + `reports/INJECTION_REDTEAM.md`；`npm run security:redteam`（`--strict` 暂不接 CI）
 - 首跑自检 / CI：`npm run doctor`（`scripts/doctor.ts`）；`.github/workflows/ci.yml`。GitHub 远端已真跑过一次（run `39549359352` / `a698c71`），**`npm test` 失败**：`tests/23d` 把 CRLF 与 LF 当内容差异（BF-010）。修复后同一 commit + 补丁在 `node:24` 容器跑出 **395 通过 / 1 跳过 / 0 失败**；已推送（`f52ef4a`）并触发 run `39724718243`：**npm ci / typecheck / agents:lint / npm test 全部 success**。
 - 编辑评测（管线）：`multi-tool-agent/scripts/edit-eval.ts` + `src/evaluation/editEval.ts` + `eval/edit-fixture/base/`；产物 `reports/EDIT_EVAL.md`；`npm run eval:edit`（需 Docker + `mta-sandbox:node24`，7/7）
-- 编辑评测（真实模型）：`multi-tool-agent/scripts/edit-eval-real.ts` + `eval/edit-fixture/real/`；产物 `reports/EDIT_EVAL_REAL.md` + 脱敏证据 `EDIT_EVAL_REAL_EVIDENCE.json`；`npm run eval:edit:real -- --tasks=20 --budget-usd=1 --timeout-ms=240000`（需 Docker + `DEEPSEEK_API_KEY`，最新 20/20、L2 20/20、单轮 Wilson 下界 83.9%、约 $0.017）；`--preflight-only` 先验证 fixture 基线 15/15
+- 编辑评测（真实模型）：`multi-tool-agent/scripts/edit-eval-real.ts` + `eval/edit-fixture/real/`；产物 `reports/EDIT_EVAL_REAL.md` + 脱敏证据 `EDIT_EVAL_REAL_EVIDENCE.json`；`npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000`（需 Docker + `DEEPSEEK_API_KEY`，最新 26/26、L2 26/26；20 引导 / 4 盲测 / 2 多文件；单轮 Wilson 下界 87.1%、约 $0.025）；`--preflight-only` 先验证 fixture 基线 15/15
 - 产品化路线：`multi-tool-agent/docs/PRODUCT_READINESS.md`（To C 阈值 / 四道门 / 简历叙事 / 下一轮动作）
 - 核心报告集 + 专项评测：`multi-tool-agent/reports/{PROJECT_REPORT,AGENT_REPORT,CHANGELOG,PARAMETERS,CODE_REVIEW_2026-10-13,PARALLEL_AB,PROVIDER_BENCHMARK,ZCODE_COMPARISON,RAG_EVAL,RAG_ABLATION,EDIT_EVAL,EDIT_EVAL_REAL,INJECTION_REDTEAM}.md`（各自的更新规则见下）
 - 仓库级 skill（两个，随仓库走）：`.agents/skills/mta-verification/`（验证/复跑/取数）、`.agents/skills/mta-reporting/`（核心报告集 + 专项评测 + 收尾清单）
@@ -80,7 +82,7 @@
 - 仓库级 skill（随仓库走）：`.agents/skills/`（Codex 从 cwd 向上找 `.agents/skills`）；与 `~/.codex/skills` 同名时会**重复注入**；沙箱内**不可写**（deny ACL），改 skill 要在沙箱外
 
 **下一步（按性价比）**
-- **编辑评测从单文件扩到多文件（R22 残余）**：确定性管线 7/7、真实模型单文件 20/20 已完成（`reports/EDIT_EVAL{,_REAL}.md`）；下一阶段扩多文件/跨模块 20~30 条，单独统计部分成功、重试轮次与回滚，仍与管线评测分开汇报。
+- **编辑评测继续加难度（R22 残余）**：26 条已含 4 条盲测 + 2 条多文件（`reports/EDIT_EVAL_REAL.md`）；下一阶段接“真实 HTTP run + 人工审批 + UI 事件流”的全链路 smoke，并扩到更多文件/更大 fixture；仍单独统计部分成功、重试轮次与回滚。
 - **提示注入红队（首版已完成）**：42 条固定样本 + `npm run security:redteam` 已落地；删除/宿主命令已禁用粘性复用并要求当前批次二次确认。剩余：扩真实改写/编码/多语言样本、降低安全文档误报，对「外传密钥 / 发布 / 改审批配置」加独立二次确认/能力令牌，不只依赖 run 级污点。
 - **口径修正（2026-10-19：①②③④ 已完成）**：① ~~`limit_reached` 独立成桶~~、② ~~编排报告 `gaps` 计数 + 前端「缺口 N」徽标~~、④ ~~子任务消耗分层计数（`subtaskUsage`）~~ 均已在 `src/types.ts` / `src/runtime/AgentRuntime.ts` / `public/index.html` 落地（回归用例在 `tests/22_orchestrator.test.ts` 22h/22m）；**③ 已完成**：新增 `ask_user` + `awaiting_user` 终态（回归 `tests/48`）；残余是只识别显式工具调用，正文提问仍可能被记为 completed。
 - **~~流程图 + 量化报告生成器~~（2026-10-16 已完成「渲染层」）**：`npm run report:run -- <runId>|--last <n>|--all` → `reports/runs/<runId>.md`（Mermaid 流程图 + 分层量化 + 六阶段归因）+ `INDEX.md`；HTTP `GET /api/runs/:id/report`（`?format=md`）。实现：`src/report/{runReport,runReportFiles}.ts` + `scripts/gen-run-report.ts`；回归 `tests/41`（8 例，含 41h 验证/回滚归因）+ `tests/22` 22q。`reports/runs/` 是**本地证据缓存**，已加 `.gitignore` 不入库（`--all` 可重生成）。异步沙箱已就绪，下一步可接**终态自动触发**。

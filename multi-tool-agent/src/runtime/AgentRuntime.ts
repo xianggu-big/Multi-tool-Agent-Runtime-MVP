@@ -2028,7 +2028,7 @@ export class AgentRuntime {
   private resolvePermissions(allowedTools: string[]): Set<string> {
     const perms = new Set<string>();
     for (const t of allowedTools) {
-      const p = TOOL_PERMISSION[t];
+      const p = this.registry.get(t)?.permission ?? TOOL_PERMISSION[t];
       if (p) perms.add(p);
     }
     return perms;

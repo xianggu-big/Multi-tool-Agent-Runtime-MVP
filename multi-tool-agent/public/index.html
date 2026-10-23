@@ -104,7 +104,8 @@
   .phase.error { background: #fdeaea; color: var(--red); }
   .live { max-height: 58vh; overflow: auto; padding: 10px 4px 4px; }
   .live:empty::before { content: "任务启动后，思考文本与工具调用会实时出现在这里…"; color: var(--muted); font-size: 13px; }
-  .lcard { border: 1px solid var(--border); border-radius: 10px; margin: 0 0 10px; background: #fff; overflow: hidden; }
+  .lcard { border: 1px solid var(--border); border-radius: 10px; margin: 0 0 10px; background: #fff; overflow: hidden;
+    content-visibility: auto; contain-intrinsic-size: auto 120px; }
   .lcard.user { border-color: #cbd5e1; background: #f8fafc; }
   .lcard.llm { border-color: #bfdbfe; }
   .lcard.tool { border-color: #ddd6fe; }
@@ -1255,7 +1256,11 @@
     counts: { frames: 0, ephemeral: 0, replay: 0, live: 0, tools: 0, toolsFailed: 0, llm: 0 },
     meta: null,
     polling: null,
+    scrollTimer: null,
+    eventRaf: 0,
   };
+  const EVENT_QUEUE = [];
+  const MAX_EVENT_NODES = 500;
 
   const liveRoot = () => $('live');
 
@@ -1263,12 +1268,20 @@
     const el = liveRoot();
     return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   }
-  function scrollBottom(force) {
+  function scheduleScrollBottom() {
     const el = liveRoot();
-    if (force || LIVE.stick || $('optAutoScroll').checked) {
+    if (!(LIVE.stick || $('optAutoScroll').checked) || LIVE.scrollTimer) return;
+    LIVE.scrollTimer = setTimeout(() => {
+      LIVE.scrollTimer = null;
       el.scrollTop = el.scrollHeight;
       $('toBottom').classList.add('hide');
-    }
+    }, 100);
+  }
+  function scrollBottom(force) {
+    if (!(force || LIVE.stick || $('optAutoScroll').checked)) return;
+    if (LIVE.scrollTimer) { clearTimeout(LIVE.scrollTimer); LIVE.scrollTimer = null; }
+    liveRoot().scrollTop = liveRoot().scrollHeight;
+    $('toBottom').classList.add('hide');
   }
   liveRoot().addEventListener('scroll', () => {
     LIVE.stick = isAtBottom();
@@ -1327,6 +1340,8 @@
       rawPre: el.querySelector('.lraw pre'),
     };
     el._buf = { reasoning: '', content: '' };
+    el._rendered = { reasoning: 0, content: 0 };
+    el._needsFull = { reasoning: false, content: false };
     el._timers = { startedAt: null, frozenMs: null };
     el.querySelector('.lbodyswitch').onclick = () => el._refs.body.classList.toggle('closed');
     liveRoot().appendChild(el);
@@ -1342,11 +1357,26 @@
   /** 文本增量 → 缓冲 → requestAnimationFrame 合并渲染（高频增量不会打爆 DOM） */
   function pushText(card, channel, text) {
     card._buf[channel] += text;
+    if (card._buf[channel].length > 30000) {
+      card._buf[channel] = card._buf[channel].slice(-30000);
+      card._needsFull[channel] = true;
+    }
     card._dirty = true;
     if (!LIVE.raf) LIVE.raf = requestAnimationFrame(flushCards);
   }
-  function clipText(s) {
-    return s.length > 30000 ? '…[仅显示最近 30000 字符]\n' + s.slice(-30000) : s;
+  function appendChannel(card, channel, el) {
+    const text = card._buf[channel];
+    if (card._needsFull[channel]) {
+      el.textContent = text;
+      card._rendered[channel] = text.length;
+      card._needsFull[channel] = false;
+      return;
+    }
+    const rendered = card._rendered[channel] || 0;
+    if (text.length > rendered) {
+      el.appendChild(document.createTextNode(text.slice(rendered)));
+      card._rendered[channel] = text.length;
+    }
   }
   function flushCards() {
     LIVE.raf = 0;
@@ -1356,11 +1386,11 @@
       const r = card._refs;
       if (card._buf.reasoning) {
         r.think.classList.remove('hide');
-        r.thinkTxt.textContent = clipText(card._buf.reasoning);
+        appendChannel(card, 'reasoning', r.thinkTxt);
       }
-      r.say.textContent = clipText(card._buf.content);
+      appendChannel(card, 'content', r.say);
     }
-    scrollBottom(false);
+    scheduleScrollBottom();
   }
 
   /** 运行中耗时：本地 tick（不产生网络请求）；已结束的卡片使用服务端 durationMs */
@@ -1398,6 +1428,8 @@
   function liveReset(goal) {
     liveRoot().innerHTML = '';
     LIVE.cards.clear();
+    if (LIVE.scrollTimer) { clearTimeout(LIVE.scrollTimer); LIVE.scrollTimer = null; }
+    EVENT_QUEUE.length = 0;
     PENDING_APPROVALS.clear();   // 新任务：清空待审批计数（上一 run 的挂起审批不再计入）
     updatePendingBadge();
     LIVE.lastSeq = 0;
@@ -2102,18 +2134,32 @@
   }
   function addEvent(e) {
     if (!e || typeof e.type !== 'string' || e.type.startsWith('_')) return;
-    const div = document.createElement('div');
-    div.className = evClass(e.type);
-    const d = e.data || {};
-    let meta = '';
-    if (d.name) meta += ` · ${d.name}`;
-    if (d.durationMs != null) meta += ` · ${+d.durationMs.toFixed(1)}ms`;
-    if (d.code) meta += ` · [${d.code}]`;
-    if (e._pushDelayMs != null) meta += ` · +${Math.round(e._pushDelayMs)}ms`;
-    div.innerHTML = `<div class="t">${e.type} #${e.seq}</div><div class="meta">${new Date(e.timestamp).toLocaleTimeString()}${meta}</div>`;
+    if (e.type === 'llm_delta') return;   // 高频临时帧只画实时卡片，不复制进事件流
+    if (EVENT_QUEUE.length >= MAX_EVENT_NODES) EVENT_QUEUE.shift();
+    EVENT_QUEUE.push(e);
+    if (!LIVE.eventRaf) LIVE.eventRaf = requestAnimationFrame(flushEvents);
+  }
+  function flushEvents() {
+    LIVE.eventRaf = 0;
+    const batch = EVENT_QUEUE.splice(0, EVENT_QUEUE.length);
+    if (!batch.length) return;
     const holder = $('events');
     if (holder.dataset.placeholder) { holder.innerHTML = ''; delete holder.dataset.placeholder; }
-    holder.appendChild(div);
+    const frag = document.createDocumentFragment();
+    for (const e of batch) {
+      const div = document.createElement('div');
+      div.className = evClass(e.type);
+      const d = e.data || {};
+      let meta = '';
+      if (d.name) meta += ` · ${d.name}`;
+      if (d.durationMs != null) meta += ` · ${+d.durationMs.toFixed(1)}ms`;
+      if (d.code) meta += ` · [${d.code}]`;
+      if (e._pushDelayMs != null) meta += ` · +${Math.round(e._pushDelayMs)}ms`;
+      div.innerHTML = `<div class="t">${e.type} #${e.seq}</div><div class="meta">${new Date(e.timestamp).toLocaleTimeString()}${meta}</div>`;
+      frag.appendChild(div);
+    }
+    holder.appendChild(frag);
+    while (holder.childElementCount > MAX_EVENT_NODES) holder.firstElementChild.remove();
     holder.scrollTop = holder.scrollHeight;
   }
   function showAnswer(text, isError) {

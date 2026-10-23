@@ -349,7 +349,12 @@ export function createApp(config: RuntimeConfig) {
   });
 
   // 装配期契约自校验：spec 与工具表不一致属于配置错误，必须显式暴露（而不是运行时才发现）
-  const specIssues = validateSpecs(SUB_AGENT_SPECS, TOOL_PERMISSION, registry.names(), { maxStepsHardLimit: 20 });
+  const toolPolicy = registry.policySnapshot();
+  const specIssues = validateSpecs(SUB_AGENT_SPECS, TOOL_PERMISSION, registry.names(), {
+    maxStepsHardLimit: 20,
+    toolPermissionByName: toolPolicy.permissions,
+    toolRiskLevel: toolPolicy.riskLevels,
+  });
   const specErrors = specIssues.filter((i) => i.level === 'error');
   if (specErrors.length) {
     for (const issue of specErrors) console.error(`[agents] 契约错误 ${issue.specId}: ${issue.message}`);
@@ -485,7 +490,12 @@ export function createApp(config: RuntimeConfig) {
    * `agents/*.agent.md` 由 `npm run agents:docs` 从同一份契约生成，两者由 `npm run agents:lint` 校验一致。
    */
   app.get('/api/agents/specs', (_req, res) => {
-    const issues = validateSpecs(SUB_AGENT_SPECS, TOOL_PERMISSION, registry.names(), { maxStepsHardLimit: 20 });
+    const toolPolicy = registry.policySnapshot();
+    const issues = validateSpecs(SUB_AGENT_SPECS, TOOL_PERMISSION, registry.names(), {
+      maxStepsHardLimit: 20,
+      toolPermissionByName: toolPolicy.permissions,
+      toolRiskLevel: toolPolicy.riskLevels,
+    });
     res.json({
       specs: SUB_AGENT_SPECS.map((sp) => ({
         id: sp.id,

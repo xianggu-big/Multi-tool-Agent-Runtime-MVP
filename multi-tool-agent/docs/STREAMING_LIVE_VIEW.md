@@ -33,7 +33,7 @@
 Provider.chat(onDelta)
         │  逐字增量（content / reasoning）
         ▼
-AgentRuntime.loopBody ──► Tracer.delta()  ──► EventLogger.emit(persist:false)
+AgentRuntime.loopBody ──► Tracer.delta() ── 24ms 合并 ──► EventLogger.emit(persist:false)
         │                                              │
         │  ① 实时通道 onLive（毫秒级，不等落盘）          │
         │                                              ▼
@@ -67,7 +67,7 @@ AgentRuntime.loopBody ──► Tracer.delta()  ──► EventLogger.emit(persi
 
 | 内容 | 更新方式 | 频率 / 延迟（实测或设定） |
 | --- | --- | --- |
-| 思考 / 正文文本增量 | SSE 推送（不落盘）→ 前端 `requestAnimationFrame` 合并渲染 | 事件产生即推送；服务端「产生→推送」P95 = 0ms；渲染按帧合并（≤60 次/秒） |
+| 思考 / 正文文本增量 | 服务端按 span/channel 合并约 24ms → SSE 推送（不落盘）→ 前端 `requestAnimationFrame` 增量 append | 最多约 40 帧/秒；事件流跳过增量、节点上限 500；文本缓冲上限 30000 字符 |
 | 工具开始 / 状态变更 | SSE 事件驱动即时更新 | 同上；不等待落盘 |
 | 工具执行中计时 | 前端本地 `setInterval` tick | 200ms（纯本地，无网络请求） |
 | 运行指标（用时/次数） | 前端本地聚合 | 200ms |

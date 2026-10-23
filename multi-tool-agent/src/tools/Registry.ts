@@ -3,7 +3,7 @@
 //       权限校验、超时控制、异常规范化。工具本身无法绕过这些控制。
 
 import { z } from 'zod';
-import type { ToolDefinition, ToolResult } from '../types.js';
+import type { RiskLevel, ToolDefinition, ToolResult } from '../types.js';
 import type { Tool, ToolContext } from './types.js';
 import { errResult } from './types.js';
 import { zodToJsonSchema } from './zodToJson.js';
@@ -70,6 +70,17 @@ export class ToolRegistry {
 
   names(): string[] {
     return [...this.tools.keys()];
+  }
+
+  /** 已注册工具的真实权限与风险快照；契约门禁以此为准，避免静态表漏掉动态工具。 */
+  policySnapshot(): { permissions: Record<string, string>; riskLevels: Record<string, RiskLevel> } {
+    const permissions: Record<string, string> = {};
+    const riskLevels: Record<string, RiskLevel> = {};
+    for (const tool of this.tools.values()) {
+      permissions[tool.name] = tool.permission;
+      riskLevels[tool.name] = tool.riskLevel;
+    }
+    return { permissions, riskLevels };
   }
 
   /** 全部工具定义（供模型 tool calling） */
