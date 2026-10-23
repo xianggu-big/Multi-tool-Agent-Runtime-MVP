@@ -104,10 +104,8 @@ export class McpClientRuntime {
   }
 
   private async connectAll(): Promise<void> {
-    if (!this.specs.length) {
-      this.onTools([]);
-      return;
-    }
+    // 未配置 server：不碰 toolNames（保持调用方给的空数组），也不发任何外部请求。
+    if (!this.specs.length) return;
     await Promise.all(this.specs.map((spec) => this.connectOne(spec)));
   }
 

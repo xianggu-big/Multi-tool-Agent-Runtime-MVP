@@ -281,6 +281,12 @@ initialize → notifications/initialized → tools/list → tools/call
 代码：`src/mcp/{protocol,server,client,transport,bridge,config,bootstrap}.ts`；演示 server：`scripts/mcp-server.ts`；
 回归：`tests/44_mcp.test.ts` + `tests/64_mcp_config.test.ts`。
 
+换 server 或轮换 token 后，先用探针确认“连接 → 列工具 → 调工具”，再写配置（token 只从环境变量读）：
+
+```bash
+MTA_MCP_PROBE_URL=http://127.0.0.1:8900/mcp MTA_MCP_PROBE_TOKEN=... npm run mcp:probe
+```
+
 ---
 
 ## 5. Function calling P1：schema、并行、tool_choice

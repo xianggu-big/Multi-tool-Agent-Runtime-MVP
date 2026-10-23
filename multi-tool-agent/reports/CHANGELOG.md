@@ -79,6 +79,17 @@
 
 ## 2026-10-23
 
+### 长流式渲染量化 + MCP 真实 E2E + 工具池收口
+
+**为什么现在做**：上一轮把 MCP 主路径接上了，但还缺两件事——P0-3 只有结构性回归没有浏览器数字；MCP 只对本地临时 server 验证过。
+顺手修掉真实 E2E 暴露的口径漂移：`POST /api/runs` 回显的 `miscLimits.allowedTools` 是硬编码列表，不含 MCP 工具。
+
+- **浏览器量化**：新增 `scripts/perf-ui-stream.mjs`（`npm run perf:stream-ui`）。用真实 `public/index.html` + 真实 `EventSource`，灌 5 万条增量后读 CDP `Performance.getMetrics`、longtask 与帧间隔。本机 Edge 155 对照：**主线程阻塞 731ms → 217ms（-70%）**，最长 longtask 167→123ms，DOM 节点增长 **261,245 → 300**；6,000 条量级两者都在 300ms 内（不宣称新版更快）。报告 `reports/UI_STREAM_PERF.md`。
+- **MCP 真实 E2E**：新增 `scripts/mcp-probe.ts`（`npm run mcp:probe`，token 只从环境变量读）。对本机 MCPHub 0.12.10 实测：54 工具、真实调用 `12306-mcp-get-current-date` 104ms 返回；配置 `MTA_MCP_SERVERS` 启动服务后 `/api/mcp` ready=1，`run_started.allowedTools` 含 `mcp_hub_...`。见 `reports/HEALTH_CHECK_2026-10-23.md` 附录 D。
+- **工具池唯一真值**：新增 `src/runtime/toolPool.ts`，`AgentRuntime` 与 `server.ts` 的 `miscLimits` 共用；MCP 工具、`run_tests`、orchestrator 自检开关只在一处定义。回归 `tests/64g/64h`。
+
+**验证**：typecheck 0 错误；`npm test` **64 文件 / 430 子测试 / 430 通过 / 0 失败 / 0 跳过**；`agents:lint` 三项通过；Linux 容器等价复跑通过（Docker 用例按设计 skip）。
+
 ### MCP 客户端配置入口（P1-3 收口）
 
 **问题**：MCP 的 client/bridge/transport 都实现了，但只在测试里被调用——能力在、产品路径不在。真实 MCPHub（54 工具）已验证协议可通，用户却没有配置入口。
@@ -114,6 +125,7 @@
 **产出**（只新增文档，**零代码改动**）：
 
 - 新增 `reports/HEALTH_CHECK_2026-10-23.md`：门禁基线 + 权限矩阵（22 工具逐条比对）+ 问题清单 + 建议改动与验收方法 + MCPHub 环境实测。
+- 新增 `reports/RAG_IMPROVEMENT_2026-10-23.md`：RAG 命中率提升方案（评测集构造效度、embedding 换型、六条路线、三层指标、生成侧提示词、本机 R1 蒸馏可行性）。
 - 同时登记进 `README.md §7` 与 `PROJECT_REPORT.md §8` 两处文档地图。
 
 **主要发现**：

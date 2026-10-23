@@ -20,6 +20,8 @@
     "report": "node --import tsx src/demo/codebase.ts && node --import tsx src/demo/research.ts",
     "smoke:stream": "node --import tsx scripts/stream-smoke.ts",
     "smoke:llm": "node --import tsx scripts/llm-smoke.ts",
+    "perf:stream-ui": "node scripts/perf-ui-stream.mjs",
+    "mcp:probe": "node --import tsx scripts/mcp-probe.ts",
     "agents:docs": "node --import tsx scripts/gen-agent-docs.ts",
     "agents:lint": "node --import tsx scripts/agents-lint.ts",
     "report:params": "node --import tsx scripts/gen-params-report.ts",

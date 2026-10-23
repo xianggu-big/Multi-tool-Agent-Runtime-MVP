@@ -2,7 +2,7 @@
 
 > **一页读懂**：这个 Runtime 现在能做什么、实测到什么程度、哪里还不可靠、下一步该做什么。
 > **更新方式**：每次有实质改动就更新本文件（配合 `reports/CHANGELOG.md` 的明细）。
-> **最后更新**：2026-10-23 ｜ 对应测试规模：**64 个测试文件 / 428 个子测试（428 通过 / 0 失败 / 0 跳过）**；Docker 已启动，`40j` 已补跑通过；`eval:edit` 7/7 ｜ 参数现状见 `reports/PARAMETERS.md`
+> **最后更新**：2026-10-23 ｜ 对应测试规模：**64 个测试文件 / 430 个子测试（430 通过 / 0 失败 / 0 跳过）**；Docker 已启动，`40j` 已补跑通过；`eval:edit` 7/7 ｜ 参数现状见 `reports/PARAMETERS.md`
 > **项目工具**：`.agents/skills/{mta-verification,mta-reporting}/`（仓库级 Codex skill：验证/复跑流程、核心报告集 + 专项评测 + 收尾清单）
 > **安全审查**：2026-10-13 全面代码审查 + 对抗性测试（`reports/CODE_REVIEW_2026-10-13.md`）；**P0×2、P1×4 与 P2-1~P2-6 已修复并转为回归守卫（2026-10-19 收口）**，剩 P2-7（无鉴权，README 已声明仅本机）/ P3×3
 > **写能力**：2026-10-15 新增「沙箱 + 三级人工审批」受控写能力（M1）；2026-10-16 **M1' 接入 UI**（「允许修改文件」开关 + 修改意图确认对话框 + `allowWriteSpecs` 完整接线）；边界与缺口见 §4 R14/R15，验收与证据见 `docs/WRITE_AND_APPROVAL.md`
@@ -24,7 +24,7 @@
 | **Misc Agent（杂项）** | ✅ 可用 | 只读清点/定位/小文件解释；结构化结论（`submit_result`）；超范围 → `escalateTo` |
 | **多 Agent 编排** | ✅ 可用 | 主 Agent 拆分 → 并行派发 → 汇总核验；真实 DeepSeek 实测 **4/4 子任务成功**（27s / 13.8k tokens / \$0.0014） |
 | **人机协同（ask_user）** | ✅ 可用 | 模型缺少关键信息时调用 ask_user 显式暂停：run 进入 awaiting_user（不再伪装 completed），问题落库并在 UI 展示；回答后以新一轮任务 + contextHistory 继续。回归 tests/48 |
-| **实时流式展示** | ✅ 可用 | 思考逐字 + 工具卡片 + **tool_call 首帧骨架提前渲染**；「产生→推送」延迟 P50=P95=**0ms**（max 1.0ms）；服务端增量按 span/channel 合并约 24ms，前端事件流跳过 `llm_delta`、上限 500 条、文本增量 append、滚动 10fps（修“画面突然卡死”） |
+| **实时流式展示** | ✅ 可用 | 思考逐字 + 工具卡片 + **tool_call 首帧骨架提前渲染**；「产生→推送」延迟 P50=P95=**0ms**（max 1.0ms）；服务端增量按 span/channel 合并约 24ms，前端事件流跳过 `llm_delta`、上限 500 条、文本增量 append、滚动 10fps（修“画面突然卡死”）。**真实 Edge 5 万条 burst 对照**：阻塞 731→**217ms**、DOM 节点 261,245→**300**（`reports/UI_STREAM_PERF.md`；6,000 条量级新旧都 <300ms，不宣称更快） |
 | **可视化监控** | ✅ 可用 | 流程图 + SVG 瀑布图；子任务并行 span 直接可见 |
 | **LLM 多 Provider** | 🟡 DeepSeek 已验证 | 7 个预设（deepseek/openai/qwen/moonshot/zhipu/ollama/custom）；**仅 DeepSeek 做过真实端到端** |
 | **参数体系（Token/调参）** | ✅ 可用 | 界面可配 max_tokens / 任务 Token 预算 / 费用预算 + 6 个生成参数；越界即报错不静默改值 |
@@ -37,7 +37,7 @@
 | **子 Agent 生命周期** | ✅ 可用 | importance 三档（ephemeral/session/durable）+ 七条释放判定 + LRU 池驱逐；一次性任务结果采纳即释放、审计类保留供追问（`SubAgentLifecycle.ts`，31 测试） |
 | **知识库语义召回** | ✅ 可用 | FTS5 原生 MATCH（AND 语义）与 vec0 kNN **均已实测生效**（`available=true, vectors=2`，回归守卫钉死原生可用性）；LIKE / 内存余弦为显式兜底 |
 | **切块级 RAG（chunk + 混合检索 + rerank）** | ✅ 可用 | 文档 → 512/64 切块（`text` 可精确按偏移切片，标题只进 `embedText`）→ embedding（离线 hash 默认；设 `MTA_EMBEDDING_MODEL` 切真实模型）→ BM25 + Flat/HNSW/IVF（支持删除/upsert）→ RRF/加权融合 → rerank（尾部短块按原文区间合并，overlap 不重复）；`POST /api/rag/rebuild`（分页、上限 5 万文档）、`GET /api/rag/search`、Agent 工具 `knowledge_search`；`npm run rag:bench` / `rag:ablation` 产出 `reports/RAG_EVAL.md` / `RAG_ABLATION.md`（19 文档 / 151 chunks / 18 查询：RRF 88.9% → rerank **100%**，MRR 0.690→0.750，nDCG 0.536→0.638） |
-| **MCP（server + client + 桥接 + 主路径配置）** | ✅ 可用 | stdio / Streamable HTTP（客户端增量解析 SSE + `Mcp-Session-Id`）两种 transport；`initialize → tools/list → tools/call`；`registerMcpTools()` 把外部工具变成普通 Tool（JSON Schema 原样暴露，权限 `mcp:call`，风险按 annotations 推断）；取消信号可穿透到 `notifications/cancelled`（客户端超时也会主动发 `reason:'timeout'`）；`POST /mcp` / `DELETE /mcp`。**2026-10-23 起主路径可配**：`MTA_MCP_SERVERS`（JSON 数组 + `names` 白名单）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池（code-edit 子 Agent 不注入）；`GET /api/mcp` 安全状态；单 server 失败只报 `MCP_UNAVAILABLE`，不拖垮服务。回归 `tests/44` + `tests/64` |
+| **MCP（server + client + 桥接 + 主路径配置）** | ✅ 可用 | stdio / Streamable HTTP（客户端增量解析 SSE + `Mcp-Session-Id`）两种 transport；`initialize → tools/list → tools/call`；`registerMcpTools()` 把外部工具变成普通 Tool（JSON Schema 原样暴露，权限 `mcp:call`，风险按 annotations 推断）；取消信号可穿透到 `notifications/cancelled`（客户端超时也会主动发 `reason:'timeout'`）；`POST /mcp` / `DELETE /mcp`。**2026-10-23 起主路径可配**：`MTA_MCP_SERVERS`（JSON 数组 + `names` 白名单）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池（code-edit 子 Agent 不注入）；`GET /api/mcp` 安全状态；单 server 失败只报 `MCP_UNAVAILABLE`，不拖垮服务。**真实 MCPHub 0.12.10 已 E2E**：54 工具、真实调用 104ms、run 工具池含 `mcp_hub_*`（HEALTH 附录 D）。回归 `tests/44` + `tests/64` |
 | **Function calling 控制** | ✅ 可用 | `tool_choice`（auto/none/required/指定函数）与 `parallel_tool_calls` 按 run 透传，HTTP 层校验非法值/白名单（400）；forced tool 不在本 run 工具池时执行前直接 `INVALID_TOOL_CHOICE`（不调用模型）；同轮多工具走工作池并发（`maxToolConcurrency`） |
 | **慢回答诊断** | ✅ 可用 | `GET /api/runs/:id/diagnosis`：wall vs busy、模型/工具 sum vs union、并发节省、首 token、按 step 的 token/cost 热点与建议；TTFT 仅实时事件可得（`llm_delta` 不落盘） |
 | **模型调用重试预算** | ✅ 可用 | 429/5xx/网络瞬断/流空闲 指数退避重试，默认 2 次；流式吐过增量则不再重试防重复 |
@@ -230,6 +230,7 @@ curl -s "http://localhost:3000/api/errors?view=summary"   # 高频错误聚合�
 | **`reports/PROGRESS_2026-10-16.md`**（快照，一次性） | 想看某一时点的整体进度：完成状态 / 进行中 / 阻塞与风险分级（按需追加新快照） |
 | **`reports/RUN_REVIEW_2026-10-16.md`**（复核快照，一次性） | 想核查某段实测会话「agent 说法 vs 实际记录」：逐条判定 + 证据索引（按需追加新复核） |
 | **`reports/HEALTH_CHECK_2026-10-23.md`**（全身检查，一次性，只读） | 要接 MCP / 改权限 / 补契约门禁之前：门禁基线、权限矩阵、P0（`permissionsOf` 缺失与 `maxRiskLevel` 未校验）、建议改动与验收方法 |
+| **`reports/UI_STREAM_PERF.md`**（人写） | 想验证“长回答会不会把浏览器卡死”：真实 Edge + 真实 SSE，5 万条增量 burst 的 Task/JS/Layout、longtask、帧间隔与修复前后 DOM 节点对照；`npm run perf:stream-ui` |
 | **`docs/WRITE_PRINCIPLES.md`** | 要改**写路径**（工具 / 审批 / 沙箱 / 回滚）之前：方针层原则（能力常开、动作门控）+ 四道审核闸 + 四层回溯 + 自检清单 |
 | **`docs/SECURITY_BOUNDARIES.md`** | 要处理不可信内容 / 提示注入：威胁模型、四层防线、run 污点与审批降权、高危动作禁用粘性 + 当前批次二次确认、红队结果与已知缺口、复现方式 |
 | **`docs/RAG_AND_AGENT_STACK.md`** | 要回答/实现 RAG 与 Agent 应用栈：chunk/embedding 取舍、HNSW vs IVF、RRF+rerank 实测、MCP/function calling、慢回答诊断、流式与中断、LangGraph/LoRA/vLLM |
@@ -245,6 +246,7 @@ curl -s "http://localhost:3000/api/errors?view=summary"   # 高频错误聚合�
 | **`reports/PARALLEL_AB.md`** | 想知道"多 Agent 到底值不值"：同任务串行 vs 编排的真实墙钟/token/成本与根因 |
 | **`reports/RAG_EVAL.md`**（生成物） | 想看 RAG 实测：切块/混合检索/rerank 的 Recall/MRR/nDCG，以及 Flat/HNSW/IVF 的召回-延迟曲线；`npm run rag:bench` |
 | **`reports/RAG_ABLATION.md`**（生成物） | 想看 chunk 大小/overlap 与 embedding 维度的消融：为什么是 512/64、其他配置差多少；`npm run rag:ablation` |
+| **`reports/RAG_IMPROVEMENT_2026-10-23.md`**（方案，人写，只读） | 想提升 RAG 命中率之前：先看为什么现有 94.4% 是虚高（评测集偏袒字面匹配）、六条提升路线与三层指标（Recall/MRR/nDCG/Faithfulness/Abstain）、生成侧提示词、本机跑 R1 蒸馏版的可行性 |
 | **`reports/COMPACTION_AB.md`**（生成物） | 想看滚动摘要 vs legacy 的真实 A/B：30 run、4K 模拟窗口、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论 `not_proven`，不要外推 |
 | **`reports/EDIT_EVAL.md`**（生成物） | 想看编辑闭环是否按设计工作：真 Docker 拦截/审批/落盘/宿主回滚/TOCTOU；`npm run eval:edit` |
 | **`reports/EDIT_EVAL_REAL.md`**（生成物） | 想看真实模型能否在该管线里改对：26 条（20 引导 + 4 盲测 + 2 多文件）、L2、tokens/成本/耗时；`npm run eval:edit:real`。仍不覆盖大型重构/HTTP 人工审批全链路 |

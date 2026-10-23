@@ -17,6 +17,7 @@ import { classifyTask } from './runtime/router.js';
 import { preSplitSubtasks, pickTopLevelDirs, extractTopics } from './runtime/preSplit.js';
 import { SUB_AGENT_SPECS, listSpecIds, validateSpecs } from './agents/specs.js';
 import { TOOL_PERMISSION } from './runtime/AgentRuntime.js';
+import { toolPoolFor } from './runtime/toolPool.js';
 import { getEnv } from './env.js';
 import { clampNumber, parseGenerationParams } from './llm/params.js';
 import { diagnoseRun } from './observability/latency.js';
@@ -563,7 +564,12 @@ export function createApp(config: RuntimeConfig) {
               hardMaxSteps: config.misc.hardMaxSteps,
               scanLimit: input.misc?.scanLimit ?? config.misc.scanLimit,
               maxFileBytes: input.misc?.maxFileBytes ?? config.misc.maxFileBytes,
-              allowedTools: ['list_files', 'search_files', 'read_file', 'dir_stats', 'submit_result', 'ask_user'],
+              // 与执行期共用同一份工具池定义（含已就绪的 MCP 工具），避免回显漂移。
+              allowedTools: toolPoolFor('misc', {
+                runTestsEnabled: false,
+                allowSelfTools: false,
+                mcpTools: config.mcp.toolNames,
+              }).filter((t) => registry.has(t)),
             },
           }
         : {}),
@@ -1367,7 +1373,7 @@ export function createApp(config: RuntimeConfig) {
     return res.json({ mode, count: 0, items: knowledge.searchData(q, { limit }) });
   });
 
-  return { app, store, runtime, errors, knowledge, verification, recovery, mcp, mcpRuntime };
+  return { app, store, runtime, registry, errors, knowledge, verification, recovery, mcp, mcpRuntime };
 }
 
 interface ParsedRunLimits {

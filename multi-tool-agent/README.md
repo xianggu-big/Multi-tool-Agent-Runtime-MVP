@@ -41,6 +41,9 @@ npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000  # 26 �
 npm run eval:compaction    # 上下文压缩 A/B（30 run；需 DEEPSEEK_API_KEY，约 $0.03）→ reports/COMPACTION_AB.md
 npm run security:redteam   # 42 条注入样本 → reports/INJECTION_REDTEAM.md
 npm run digest:list         # 每次 run 的复盘摘要（成功也记；默认只看有问题的）
+npm run perf:stream-ui -- --events=50000   # 真实浏览器长流式渲染开销 → reports/UI_STREAM_PERF.md（需 Edge/Chrome）
+# MCP 真实 server 探针（token 只从环境变量读，不落盘）：
+#   MTA_MCP_PROBE_URL=http://127.0.0.1:8900/mcp MTA_MCP_PROBE_TOKEN=... npm run mcp:probe
 ```
 
 > **⚠️ 常见坑：`ERR_DLOPEN_FAILED` / `NODE_MODULE_VERSION 不匹配`**
@@ -269,6 +272,7 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/PARALLEL_AB.md` —— **并行 vs 串行 A/B 量化**（人写）：换实验就加一节，保留「口径与边界」。
 - `reports/RAG_EVAL.md` —— **RAG P0 评测**（生成物）：切块/混合检索/rerank 质量 + Flat/HNSW/IVF 召回-延迟；`npm run rag:bench`。
 - `reports/RAG_ABLATION.md` —— **RAG 消融**（生成物）：chunk 大小/overlap 与 embedding 维度对 Recall/MRR/nDCG/存储的影响；`npm run rag:ablation`。
+- `reports/RAG_IMPROVEMENT_2026-10-23.md` —— **RAG 命中率提升方案**（人写，只读）：为什么 vector 单路只有 55.6%（embedding 是词法哈希 + 评测集偏袒字面匹配）、六条提升路线（重建评测集 → 换 bge embedding → 多查询 → cross-encoder rerank → pre-filter → small-to-big）、三层指标清单与诊断映射、生成侧提示词、本机跑 R1 蒸馏版的可行性。
 - `reports/COMPACTION_AB.md` —— **上下文压缩 A/B**（生成物）：rolling vs legacy 的 30 run 真实模型对照、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论是 `not_proven`，不要外推成“滚动摘要更优”。
 - `reports/EDIT_EVAL.md` —— **编辑管线评测**（生成物）：真 Docker + 真审批 + 真落盘 + 宿主复验/回滚，7 个确定性场景；`npm run eval:edit`。**注意：衡量管线，不是模型编辑智力**。
 - `reports/EDIT_EVAL_REAL.md` —— **真实模型编辑评测**（生成物）：26 条任务（20 引导 + 4 盲测 + 2 多文件），Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；当前 **26/26（L2 26/26）**、833,082 tokens / $0.0248，单轮 95% Wilson 下界 **87.1%**；逐任务脱敏证据在 `reports/EDIT_EVAL_REAL_EVIDENCE.json`。`npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000`。**不外推大型重构或需要人工澄清的需求**。
@@ -278,7 +282,8 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/runs/` —— **单 run 报告**（生成物，**不进 git**）：每个 run 一份 `reports/runs/<runId>.md`（Mermaid 流程图 + 分层量化 + 六阶段归因）+ `INDEX.md`；`npm run report:run -- <runId>|--all`；HTTP 同源 `GET /api/runs/:id/report`。
 - `reports/PROGRESS_2026-10-16.md` —— **进度快照**（一次性，非维护文档）：某一时点的模块完成状态 / 进行中 / 阻塞与风险分级；后续快照按需追加。
 - `reports/RUN_REVIEW_2026-10-16.md` —— **运行核查报告**（一次性）：某段实测会话的「agent 说法 vs 数据记录」逐条判定（127 项 / `*.html` 0 命中 / 写通道 / "委派虚构"质疑的核查 + 证据索引）。
-- `reports/HEALTH_CHECK_2026-10-23.md` —— **全身检查报告**（一次性）：初始门禁基线（416/416）、权限矩阵、问题清单与修复状态（P0 门禁/卡死已修，P1 MCP 主路径配置仍未接）、MCPHub 环境实测。
+- `reports/HEALTH_CHECK_2026-10-23.md` —— **全身检查报告**（一次性）：初始门禁基线（416/416）、权限矩阵、问题清单与修复状态（P0 门禁/卡死、P1 MCP 主路径、P2 文档漂移均已完成）、MCPHub 环境实测与真实 E2E（附录 C/D）。
+- `reports/UI_STREAM_PERF.md` —— **长流式渲染量化**（人写）：真实浏览器 + 真实 SSE 路径，5 万条增量 burst 下修复前后对照（阻塞 731ms → 217ms，DOM 节点 26 万 → 300）；`npm run perf:stream-ui`。
 - 改完代码请跑：`npm run report:refresh`（重新生成 **Agent 报告 + 参数台账 + 子 Agent 契约文档**）；跑了真实 run 或改了报告渲染后可 `npm run report:run -- --all`（重生 `reports/runs/`）；改了写路径/沙箱/审批后跑 `npm run eval:edit`（需 Docker，约 80s）；改了注入特征或安全边界后跑 `npm run security:redteam`（无需 Key）。
 
 - `docs/ARCHITECTURE.md` —— 架构、模块职责、真实 Agent Loop 流程、Tool Registry 安全边界、状态机与恢复、已知缺陷。

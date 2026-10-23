@@ -7,12 +7,15 @@
 //   - token 只进请求头，不出现在状态接口、错误消息或事件里。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { z } from 'zod';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { mcpToolPrefix, parseMcpServers, redactMcpUrl } from '../src/mcp/config.js';
 import { McpClientRuntime } from '../src/mcp/bootstrap.js';
+import { toolPoolFor } from '../src/runtime/toolPool.js';
 import { ToolRegistry } from '../src/tools/Registry.js';
+import { okResult } from '../src/tools/types.js';
 import { ErrorReporter } from '../src/runtime/errorReporter.js';
 import { loadConfig } from '../src/config.js';
 import { makeCtx } from './helpers.js';
@@ -161,5 +164,51 @@ test('64f) 未配置：GET /api/mcp 返回 configured=0，不发起外部连接'
     assert.deepEqual(mcpRuntime.status().tools, []);
   } finally {
     await new Promise<void>((resolve) => http.close(() => resolve()));
+  }
+});
+
+test('64g) 工具池唯一真值：MCP 工具按 runType 注入，orchestrator 受 allowSelfTools 控制', () => {
+  const mcpTools = ['mcp_hub_date'];
+  assert.deepEqual(toolPoolFor('misc', { runTestsEnabled: false, allowSelfTools: false, mcpTools }).slice(-1), mcpTools);
+  assert.ok(!toolPoolFor('orchestrator', { runTestsEnabled: false, allowSelfTools: false, mcpTools }).includes('mcp_hub_date'));
+  assert.ok(toolPoolFor('orchestrator', { runTestsEnabled: false, allowSelfTools: true, mcpTools }).includes('mcp_hub_date'));
+  // run_tests 默认不进池
+  assert.ok(!toolPoolFor('codebase', { runTestsEnabled: false, allowSelfTools: false, mcpTools }).includes('run_tests'));
+  assert.ok(toolPoolFor('codebase', { runTestsEnabled: true, allowSelfTools: false, mcpTools }).includes('run_tests'));
+});
+
+test('64h) POST /api/runs 的 miscLimits 回显与执行期共用工具池（含已就绪 MCP 工具）', { timeout: 30_000 }, async () => {
+  const { createApp } = await import('../src/server.js');
+  const config = tmpConfig();
+  config.mcp = { servers: [], toolNames: ['mcp_hub_date'] };
+  const { app, registry } = createApp(config);
+  registry.register({
+    name: 'mcp_hub_date',
+    description: '测试占位 MCP 工具',
+    inputSchema: z.object({}),
+    permission: 'mcp:call',
+    riskLevel: 'safe',
+    timeoutMs: 1000,
+    execute: async () => okResult({ ok: true }, 0),
+  });
+  const { http, base } = await listen(app);
+  try {
+    const res = await fetch(`${base}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        runType: 'misc',
+        goal: '现在几号',
+        repoPath: resolve('demo/codebase-sample'),
+        mockScenario: 'misc-basic',
+      }),
+    });
+    assert.equal(res.status, 201);
+    const body = (await res.json()) as { runId: string; miscLimits: { allowedTools: string[] } };
+    assert.ok(body.miscLimits.allowedTools.includes('mcp_hub_date'));
+    assert.ok(body.miscLimits.allowedTools.includes('submit_result'));
+    await fetch(`${base}/api/runs/${body.runId}/cancel`, { method: 'POST' });
+  } finally {
+    await new Promise<void>((resolveClose) => http.close(() => resolveClose()));
   }
 });

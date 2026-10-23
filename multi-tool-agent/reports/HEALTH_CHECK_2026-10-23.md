@@ -304,6 +304,12 @@
 
 ---
 
+## 6. 关联报告
+
+- `reports/RAG_IMPROVEMENT_2026-10-23.md` —— RAG 命中率提升方案（同一轮讨论产出）：为什么 vector 单路 55.6%、评测集偏袒字面匹配、六条提升路线、三层指标、生成侧提示词、本机跑 R1 蒸馏版的可行性。**本轮未跑 `rag:bench`，所有分数引自既有报告。**
+
+---
+
 ## 附录 A：MCPHub 环境实测（2026-10-23）
 
 **服务**：容器 `epic_satoshi` / `samanhappy/mcphub` v0.12.10，`0.0.0.0:8900→3000`，配置挂载 `D:/docker_profile/mcp_settings.json`。
@@ -377,12 +383,54 @@
 |---|---|---|
 | P0-1 动态工具权限静默跳过 | ✅ 已修 | `ToolRegistry.policySnapshot()` + `validateSpecs({toolPermissionByName,toolRiskLevel})`；查不到权限映射直接 error；`resolvePermissions()` 读注册表。回归 `tests/62a/62b`；Linux `node:24` 容器等价 CI 通过 |
 | P0-2 `maxRiskLevel` 未校验 | ✅ 已修 | 按 `safe < low < medium < high` 校验 spec 内每个已注册工具；越界 error。回归 `tests/62c` |
-| P0-3 流式渲染把主线程打满 | ✅ 已修（结构性回归） | 服务端增量 24ms 合并；前端跳过 `llm_delta`、事件上限 500、文本增量 append、滚动 10fps、`content-visibility:auto`。回归 `tests/59d`、`tests/63a/63b`；尚未做浏览器 Performance 长任务量化 |
-| P1-3 MCP 主路径无配置入口 | ✅ 已修 | `MTA_MCP_SERVERS`（JSON 数组，`names` 白名单必填）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池（code-edit 子 Agent 不注入）；`GET /api/mcp` 安全状态；失败隔离 `MCP_UNAVAILABLE`。回归 `tests/64a~64f`（6 例） |
+| P0-3 流式渲染把主线程打满 | ✅ 已修（含浏览器量化） | 服务端增量 24ms 合并；前端跳过 `llm_delta`、事件上限 500、文本增量 append、滚动 10fps、`content-visibility:auto`。回归 `tests/59d`、`tests/63a/63b`；真实 Edge + 真实 SSE 5 万条 burst：阻塞 **731→217ms**、DOM 节点 **26 万→300**，见 `reports/UI_STREAM_PERF.md` |
+| P1-3 MCP 主路径无配置入口 | ✅ 已修 | `MTA_MCP_SERVERS`（JSON 数组，`names` 白名单必填）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池（code-edit 子 Agent 不注入）；`GET /api/mcp` 安全状态；失败隔离 `MCP_UNAVAILABLE`；真实 MCPHub E2E 见附录 D。回归 `tests/64a~64h`（8 例） |
 | P2-4 README 工具表漂移 | ✅ 已修 | README §2 补齐 `knowledge_search` / `ask_user` / orchestrator 自检工具，并新增 MCP 配置段；`.env.example` 补 `MTA_MCP_SERVERS` 格式 |
 
-当天全量：**63 文件 / 422 子测试 / 422 通过 / 0 失败 / 0 跳过**；真实编辑评测扩到 26 条（20 引导 + 4 盲测 + 2 多文件）并 **26/26** 通过。
+当天全量：**64 文件 / 430 子测试 / 430 通过 / 0 失败 / 0 跳过**；真实编辑评测扩到 26 条（20 引导 + 4 盲测 + 2 多文件）并 **26/26** 通过。
 
 > ⚠️ **密钥事件**：附录 A 曾把本机 MCPHub 的 bearer token 明文写入本文件，并随提交 `cff7786` 推到远端。
 > 工作区已替换为 `<redacted-local-token>`；**旧 token 仍存在于 Git 历史**。处置：优先在 MCPHub 删除/轮换 `mta-probe`，
 > 后续是否重写历史需单独确认（未经同意不做 force push）。
+
+---
+
+## 附录 D：真实 MCPHub 端到端（2026-10-23，配置入口完成后）
+
+**目的**：验证的不只是协议客户端，而是「`MTA_MCP_SERVERS` → 服务启动 → 桥接 → run 工具池」整条主路径。
+**token**：只从进程环境变量读取，不写入任何文件；本附录不记录 token 值。
+
+### D.1 协议与工具发现
+
+```text
+MCPHub 0.12.10 / protocol 2024-11-05 / tools = 54
+[mcp-probe] call 12306-mcp-get-current-date ok in 104ms → 2026-10-23
+```
+
+- 54 个工具里混有高副作用工具（如 `playwright-browser_run_code_unsafe`），**再次说明 `names` 白名单必须强制**。
+- `playwright-browser_tabs` 调用返回 `isError=true`：MCPHub 容器内缺 Chromium（`/opt/google/chrome/chrome` not found）。
+  这是**外部 server 自身不可用**，不是桥接层失败；本项目的处理是把 `isError` 如实回给模型，不伪装成功。
+
+### D.2 服务主路径
+
+配置一个 server、白名单只放 `12306-mcp-get-current-date`，启动真实服务后：
+
+```json
+GET /api/mcp
+{ "configured": 1, "ready": true, "toolCount": 1,
+  "tools": ["mcp_hub_12306-mcp-get-current-date"],
+  "servers": [{ "name": "hub", "state": "ready", "toolCount": 1 }] }
+```
+
+随后跑一个 `misc` run，`run_started.data.allowedTools` 为：
+
+```text
+list_files, search_files, read_file, dir_stats, submit_result, ask_user, mcp_hub_12306-mcp-get-current-date
+```
+
+即：**配置确实进入了执行期工具池**，不是只挂在状态接口上。
+
+### D.3 残余
+
+- 没有让真实 LLM 自主选择 MCP 工具（本次只验证“配置→桥接→可执行”，模型选择仍由 function calling 决定）。
+- 旧 token 仍有效 → **必须在 MCPHub 轮换**；轮换后用 `npm run mcp:probe` 重跑 D.1，再更新 `MTA_MCP_SERVERS`。
