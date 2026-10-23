@@ -88,7 +88,7 @@
 - **MCP 真实 E2E**：新增 `scripts/mcp-probe.ts`（`npm run mcp:probe`，token 只从环境变量读）。对本机 MCPHub 0.12.10 实测：54 工具、真实调用 `12306-mcp-get-current-date` 104ms 返回；配置 `MTA_MCP_SERVERS` 启动服务后 `/api/mcp` ready=1，`run_started.allowedTools` 含 `mcp_hub_...`。见 `reports/HEALTH_CHECK_2026-10-23.md` 附录 D。
 - **工具池唯一真值**：新增 `src/runtime/toolPool.ts`，`AgentRuntime` 与 `server.ts` 的 `miscLimits` 共用；MCP 工具、`run_tests`、orchestrator 自检开关只在一处定义。回归 `tests/64g/64h`。
 
-**验证**：typecheck 0 错误；`npm test` **64 文件 / 430 子测试 / 430 通过 / 0 失败 / 0 跳过**；`agents:lint` 三项通过；Linux 容器等价复跑通过（Docker 用例按设计 skip）。
+**验证**：typecheck 0 错误；`npm test` **64 文件 / 430 子测试 / 430 通过 / 0 失败 / 0 跳过**；`agents:lint` 三项通过；Linux 容器等价复跑 **429 通过 / 1 Docker skip**；远端 CI run `39903621413`（`8370039`）全绿。
 
 ### MCP 客户端配置入口（P1-3 收口）
 

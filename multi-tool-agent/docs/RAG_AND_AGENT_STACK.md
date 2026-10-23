@@ -273,6 +273,7 @@ initialize → notifications/initialized → tools/list → tools/call
 - **失败隔离**：各 server 并行连接；连不上只把该 server 标为 `error` 并上报 `MCP_UNAVAILABLE`，
   不影响 HTTP 服务与其它 server。`POST /api/runs` 只做**有界等待**（默认 10s），server 挂住时 run 先跑。
 - **状态与脱敏**：`GET /api/mcp` 返回 `configured / ready / connecting / toolCount / tools / servers[]`；
+  注意 `ready` 只表示「启动探测已结束」，**不代表全部可用**——逐 server 看 `servers[].state`（ready / error）；
   `servers[].missing` 列出白名单里 server 实际没提供的工具（其余工具照常可用，不静默假装全部命中）；
   URL 去掉 query/hash/凭据，错误消息里的 token 会二次打码，token 只进请求头。
 - **配置校验 fail-fast**：非法 JSON、缺 `names`、重名、URL 内嵌账号密码、非 http/https、超时越界都在启动时报错，
