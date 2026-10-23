@@ -21,6 +21,7 @@ import { getEnv } from './env.js';
 import { clampNumber, parseGenerationParams } from './llm/params.js';
 import { diagnoseRun } from './observability/latency.js';
 import { McpServer } from './mcp/server.js';
+import { McpClientRuntime } from './mcp/bootstrap.js';
 
 /** 任务终态事件（收到即关闭 SSE 连接） */
 const TERMINAL_EVENT_TYPES = new Set<TraceEventType>([
@@ -288,6 +289,16 @@ export function validateRunRequest(body: Record<string, unknown>, config: Runtim
 export function createApp(config: RuntimeConfig) {
   const { store, runtime, hub, logger, registry, errors, knowledge, verification, recovery } = buildRuntime(config);
 
+  // MCP 客户端（Streamable HTTP）：默认关闭；配置了 MTA_MCP_SERVERS 才连接。
+  // 单个 server 失败只标 error，不阻塞 HTTP 服务；工具名回填后由 AgentRuntime 按 runType 暴露。
+  const mcpRuntime = new McpClientRuntime(
+    config.mcp.servers,
+    registry,
+    errors,
+    (names) => { config.mcp.toolNames = names; },
+  );
+  void mcpRuntime.start();
+
   /** 从 run_started 事件里取仓库路径（RunRecord 不持久化 repoPath；事件是唯一真值） */
   const repoPathOfRun = (runId: string): string | null => {
     const ev = store.getEvents(runId).find((e) => e.type === 'run_started');
@@ -517,7 +528,9 @@ export function createApp(config: RuntimeConfig) {
     });
   });
 
-  app.post('/api/runs', (req, res) => {
+  app.post('/api/runs', async (req, res) => {
+    // 首启时给 MCP 一个有界等待窗口：连上就带工具跑，超时/失败则先跑（status 可查）。
+    await mcpRuntime.ready().catch(() => {});
     const { input, error } = validateRunRequest((req.body ?? {}) as Record<string, unknown>, config);
     if (error || !input) {
       return res.status(400).json({ error: error ?? '请求无效' });
@@ -555,6 +568,11 @@ export function createApp(config: RuntimeConfig) {
           }
         : {}),
     });
+  });
+
+  /** MCP 客户端状态（安全视图：不含 token；未配置时 configured=0）。 */
+  app.get('/api/mcp', (_req, res) => {
+    res.json(mcpRuntime.status());
   });
 
   app.get('/api/runs/:id', (req, res) => {
@@ -1349,7 +1367,7 @@ export function createApp(config: RuntimeConfig) {
     return res.json({ mode, count: 0, items: knowledge.searchData(q, { limit }) });
   });
 
-  return { app, store, runtime, errors, knowledge, verification, recovery, mcp };
+  return { app, store, runtime, errors, knowledge, verification, recovery, mcp, mcpRuntime };
 }
 
 interface ParsedRunLimits {

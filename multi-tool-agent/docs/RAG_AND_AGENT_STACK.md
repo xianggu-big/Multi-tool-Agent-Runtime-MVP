@@ -257,7 +257,29 @@ initialize → notifications/initialized → tools/list → tools/call
 - 工具执行抛错：放在 `result.isError = true`，**不是** JSON-RPC error（MCP 约定）。
 - 通知（无 `id`）不返回响应；batch 支持单条/多条。
 
-代码：`src/mcp/{protocol,server,client,transport,bridge}.ts`；演示 server：`scripts/mcp-server.ts`。
+### 4.4 主路径配置入口（2026-10-23）
+
+默认**不连接任何外部 MCP**。启用方式只有一个：显式设置 `MTA_MCP_SERVERS`（JSON 数组），
+每个 server 必须给 `names` 白名单——这是刻意的上下文纪律，否则外部 server 的全部工具 schema 会挤占 prompt。
+
+```json
+[{"name":"hub","url":"http://127.0.0.1:9060/mcp","token":"","names":["kb_search"],"timeoutMs":15000}]
+```
+
+- **名字隔离**：桥接后的工具名是 `mcp_<server>_<tool>`，多 server 同名工具不会互相覆盖。
+- **权限**：统一 `mcp:call`；风险按 annotations 推断（见 4.1），未声明为 `medium`（不自动重试）。
+- **工具池**：codebase / research / misc 与「开启自检工具」的 orchestrator 会看到这些工具；
+  **code-edit 子 Agent 不注入**——写路径必须留在沙箱 + 人工审批 + apply-journal 内，不能被远端工具绕过。
+- **失败隔离**：各 server 并行连接；连不上只把该 server 标为 `error` 并上报 `MCP_UNAVAILABLE`，
+  不影响 HTTP 服务与其它 server。`POST /api/runs` 只做**有界等待**（默认 10s），server 挂住时 run 先跑。
+- **状态与脱敏**：`GET /api/mcp` 返回 `configured / ready / connecting / toolCount / tools / servers[]`；
+  `servers[].missing` 列出白名单里 server 实际没提供的工具（其余工具照常可用，不静默假装全部命中）；
+  URL 去掉 query/hash/凭据，错误消息里的 token 会二次打码，token 只进请求头。
+- **配置校验 fail-fast**：非法 JSON、缺 `names`、重名、URL 内嵌账号密码、非 http/https、超时越界都在启动时报错，
+  不允许“看起来启用了但实际没连”。
+
+代码：`src/mcp/{protocol,server,client,transport,bridge,config,bootstrap}.ts`；演示 server：`scripts/mcp-server.ts`；
+回归：`tests/44_mcp.test.ts` + `tests/64_mcp_config.test.ts`。
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **一页读懂**：这个 Runtime 现在能做什么、实测到什么程度、哪里还不可靠、下一步该做什么。
 > **更新方式**：每次有实质改动就更新本文件（配合 `reports/CHANGELOG.md` 的明细）。
-> **最后更新**：2026-10-23 ｜ 对应测试规模：**63 个测试文件 / 422 个子测试（422 通过 / 0 失败 / 0 跳过 / 约 17s）**；Docker 已启动，`40j` 已补跑通过；`eval:edit` 7/7 ｜ 参数现状见 `reports/PARAMETERS.md`
+> **最后更新**：2026-10-23 ｜ 对应测试规模：**64 个测试文件 / 428 个子测试（428 通过 / 0 失败 / 0 跳过）**；Docker 已启动，`40j` 已补跑通过；`eval:edit` 7/7 ｜ 参数现状见 `reports/PARAMETERS.md`
 > **项目工具**：`.agents/skills/{mta-verification,mta-reporting}/`（仓库级 Codex skill：验证/复跑流程、核心报告集 + 专项评测 + 收尾清单）
 > **安全审查**：2026-10-13 全面代码审查 + 对抗性测试（`reports/CODE_REVIEW_2026-10-13.md`）；**P0×2、P1×4 与 P2-1~P2-6 已修复并转为回归守卫（2026-10-19 收口）**，剩 P2-7（无鉴权，README 已声明仅本机）/ P3×3
 > **写能力**：2026-10-15 新增「沙箱 + 三级人工审批」受控写能力（M1）；2026-10-16 **M1' 接入 UI**（「允许修改文件」开关 + 修改意图确认对话框 + `allowWriteSpecs` 完整接线）；边界与缺口见 §4 R14/R15，验收与证据见 `docs/WRITE_AND_APPROVAL.md`
@@ -37,7 +37,7 @@
 | **子 Agent 生命周期** | ✅ 可用 | importance 三档（ephemeral/session/durable）+ 七条释放判定 + LRU 池驱逐；一次性任务结果采纳即释放、审计类保留供追问（`SubAgentLifecycle.ts`，31 测试） |
 | **知识库语义召回** | ✅ 可用 | FTS5 原生 MATCH（AND 语义）与 vec0 kNN **均已实测生效**（`available=true, vectors=2`，回归守卫钉死原生可用性）；LIKE / 内存余弦为显式兜底 |
 | **切块级 RAG（chunk + 混合检索 + rerank）** | ✅ 可用 | 文档 → 512/64 切块（`text` 可精确按偏移切片，标题只进 `embedText`）→ embedding（离线 hash 默认；设 `MTA_EMBEDDING_MODEL` 切真实模型）→ BM25 + Flat/HNSW/IVF（支持删除/upsert）→ RRF/加权融合 → rerank（尾部短块按原文区间合并，overlap 不重复）；`POST /api/rag/rebuild`（分页、上限 5 万文档）、`GET /api/rag/search`、Agent 工具 `knowledge_search`；`npm run rag:bench` / `rag:ablation` 产出 `reports/RAG_EVAL.md` / `RAG_ABLATION.md`（19 文档 / 151 chunks / 18 查询：RRF 88.9% → rerank **100%**，MRR 0.690→0.750，nDCG 0.536→0.638） |
-| **MCP（server + client + 桥接）** | ✅ 可用 | stdio / Streamable HTTP（客户端增量解析 SSE + `Mcp-Session-Id`）两种 transport；`initialize → tools/list → tools/call`；`registerMcpTools()` 把外部工具变成普通 Tool（JSON Schema 原样暴露，权限 `mcp:call`，风险按 annotations 推断）；取消信号可穿透到 `notifications/cancelled`（客户端超时也会主动发 `reason:'timeout'`）；`POST /mcp` / `DELETE /mcp` |
+| **MCP（server + client + 桥接 + 主路径配置）** | ✅ 可用 | stdio / Streamable HTTP（客户端增量解析 SSE + `Mcp-Session-Id`）两种 transport；`initialize → tools/list → tools/call`；`registerMcpTools()` 把外部工具变成普通 Tool（JSON Schema 原样暴露，权限 `mcp:call`，风险按 annotations 推断）；取消信号可穿透到 `notifications/cancelled`（客户端超时也会主动发 `reason:'timeout'`）；`POST /mcp` / `DELETE /mcp`。**2026-10-23 起主路径可配**：`MTA_MCP_SERVERS`（JSON 数组 + `names` 白名单）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池（code-edit 子 Agent 不注入）；`GET /api/mcp` 安全状态；单 server 失败只报 `MCP_UNAVAILABLE`，不拖垮服务。回归 `tests/44` + `tests/64` |
 | **Function calling 控制** | ✅ 可用 | `tool_choice`（auto/none/required/指定函数）与 `parallel_tool_calls` 按 run 透传，HTTP 层校验非法值/白名单（400）；forced tool 不在本 run 工具池时执行前直接 `INVALID_TOOL_CHOICE`（不调用模型）；同轮多工具走工作池并发（`maxToolConcurrency`） |
 | **慢回答诊断** | ✅ 可用 | `GET /api/runs/:id/diagnosis`：wall vs busy、模型/工具 sum vs union、并发节省、首 token、按 step 的 token/cost 热点与建议；TTFT 仅实时事件可得（`llm_delta` 不落盘） |
 | **模型调用重试预算** | ✅ 可用 | 429/5xx/网络瞬断/流空闲 指数退避重试，默认 2 次；流式吐过增量则不再重试防重复 |

@@ -40,6 +40,7 @@
 | **BF-011** | 10-22 | 真实模型编辑评测首轮显示 20/20，但 R04/R11/R14 的 `setup` 没真正注入缺陷；R11 又因等价写法被判失败 | 首轮 20 条结论不可信；若直接对外会虚报模型编辑能力 | fixture 是 CRLF，`setup.find` 按 LF 写，`String.replace` 静默未命中；源码断言只认一种写法 | ✅ 已验证 | 首轮证据 `data/edit-eval-real/20261022-130617-398/R11/result.json`；修复后重跑 `data/edit-eval-real/20261022-131513-248/` = 20/20 |
 | **BF-012** | 10-23 | 契约门禁对动态工具静默失效：`mcp_*` 没有权限映射也能过 lint；`maxRiskLevel` 只写进文档、从未校验 | 接 MCP 后可能漏授权/误放高危工具；文档显示 safe 而实际工具是 high | `validateSpecs` 用 `toolPermission[t]` 后 `filter(Boolean)` 丢掉未知工具；风险字段没有消费点 | ✅ 已验证 | `tests/62a~62c`；Linux `node:24` 容器 `agents:lint` + 全量测试通过 |
 | **BF-013** | 10-23 | 长任务中画面突然卡死、恢复后一次性补出大量内容；服务端其实一直在跑 | 所有长回答/多轮任务，切到事件流页签更严重 | 每条 `llm_delta` 强制 append + 滚动布局；`flushCards` 每帧重写全文；事件列表无上限 | ✅ 代码 + 结构性回归（未做浏览器 Performance 量化） | `tests/59d`、`tests/63a/63b`；服务端 24ms 合并、前端 500 条上限/增量 append/10fps 滚动 |
+| **BF-014** | 10-23 | 远端 CI 在 Node 24.21.0 上 `npm test` 红：原生断言 `RemoveEnvironmentCleanupHook ... Assertion failed: (env) != nullptr`，7 个测试文件被连带判红 | 所有 CI 任务；不是业务断言失败，容易被误判成代码回归 | `better-sqlite3 11.10.0` 的 `Statement` 析构在 Node 24.21 进程退出阶段触发原生断言 | ✅ 已验证 | `.github/workflows/ci.yml` 钉 `node-version: '24.22.0'`；run `39901350247` 全绿（失败 run `39900764434`） |
 
 ---
 

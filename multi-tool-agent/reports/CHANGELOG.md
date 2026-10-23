@@ -14,6 +14,7 @@
 
 | 日期 | 参数 | 旧值 | 新值 | 原因 |
 |---|---|---|---|---|
+| 2026-10-23 | 新增 `MTA_MCP_SERVERS` | — | **空数组**（不连接任何外部 MCP） | JSON 数组显式 opt-in；每个 server 必须给 `names` 白名单，避免外部工具 schema 全量进上下文；非法配置启动即报错 |
 | 2026-10-22 | 新增 `RunInput.allowRunTests`（本 run 覆盖，非环境变量） | — | 未设置 = 跟随 `CODEBASE_RUN_TESTS_ENABLED` | 运行测试是「在目标仓库执行代码」的能力：默认关闭时 `run_tests` 不进工具池；界面显式勾选才开启本 run |
 | 2026-10-21 | 新增 `COMPACT_MIN_ACTIVE_CHARS` / `COMPACT_MIN_NEW_CHARS` / `COMPACT_MIN_NEW_MESSAGES` | — | **2000 / 4000 / 4** | 压缩迟滞：累计 token 水位只作为门禁，活动区不够大或自上次压缩后没有足够新增时不再压缩，避免「水位过 60% 后每步都压」 |
 | 2026-10-21 | 新增 `COMPACT_SUMMARY_MAX_CHARS` / `COMPACT_GOAL_MAX_CHARS` | — | **24000 / 2000** | 滚动摘要上限与任务目标原文保留长度；达到上限停止压缩，旧摘要原文不截断 |
@@ -77,6 +78,22 @@
 ---
 
 ## 2026-10-23
+
+### MCP 客户端配置入口（P1-3 收口）
+
+**问题**：MCP 的 client/bridge/transport 都实现了，但只在测试里被调用——能力在、产品路径不在。真实 MCPHub（54 工具）已验证协议可通，用户却没有配置入口。
+
+- **配置**：`MTA_MCP_SERVERS`（JSON 数组）→ `parseMcpServers()` 校验后进入 `RuntimeConfig.mcp`。`names` **必填**（白名单），最多 8 server / 每 server 100 工具；URL 只允许 http/https、禁止内嵌账号密码；超时 1000~120000ms；重名/非法 JSON 一律 fail-fast。
+- **连接**：`McpClientRuntime` 并行连接各 server，工具名为 `mcp_<server>_<tool>`，权限统一 `mcp:call`，风险按 annotations 推断。单个 server 失败只标 `error` + 上报 `MCP_UNAVAILABLE`，不影响服务与其它 server。
+- **工具池**：codebase / research / misc 与「开启自检工具」的 orchestrator 追加 MCP 工具；**code-edit 子 Agent 不注入**（写路径必须留在沙箱/审批/apply-journal 内）。`POST /api/runs` 只做有界等待（10s），server 挂住不拖死请求。
+- **观测与脱敏**：`GET /api/mcp` 返回 `configured/ready/connecting/toolCount/tools/servers[]`，`servers[].missing` 显式列出白名单里 server 没提供的工具；URL 去 query/hash/凭据，错误消息里的 token 二次打码；启动失败只进内存/JSONL/控制台（`skipEvent`），不伪造 run 事件。`src/index.ts` 在 SIGINT/SIGTERM 时关闭 MCP 会话（3s 兜底）。
+- **文档**：`.env.example` 补格式与示例（token 留空）；README §2 工具表补齐 `knowledge_search` / `ask_user` / orchestrator 自检工具，并新增 MCP 段；`docs/RAG_AND_AGENT_STACK.md` §4.4 记录主路径。
+
+**回归**：新增 `tests/64a~64f`（6 例）：配置解析、非法配置、URL 脱敏、真实 HTTP MCP 白名单桥接、失败隔离、未配置时 `/api/mcp`。
+
+### CI 钉 Node 24.22.0（BF-014）
+
+远端 CI 在 Node **24.21.0** 上出现原生断言 `RemoveEnvironmentCleanupHook ... Assertion failed: (env) != nullptr`（`better-sqlite3 11.10.0` 的 `Statement` 析构），7 个测试文件被连带判红；业务断言本身未失败。`ci.yml` 钉 `node-version: '24.22.0'` 后 run `39901350247` 全绿。明细见 `reports/BUGFIX_LOG.md` BF-014。
 
 ### 契约门禁真实化 + 流式渲染防卡死 + 编辑评测扩到盲测/多文件
 

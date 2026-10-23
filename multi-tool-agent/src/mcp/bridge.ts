@@ -19,6 +19,8 @@ export interface McpBridgeOptions {
   timeoutMs?: number;
   /** 只桥接指定 MCP 工具名（不填 = 全部） */
   names?: string[];
+  /** names 里有、但 server 没提供的工具（不静默忽略，交给调用方暴露） */
+  onMissing?: (missing: string[]) => void;
 }
 
 export async function registerMcpTools(
@@ -28,6 +30,10 @@ export async function registerMcpTools(
 ): Promise<string[]> {
   const defs = await client.listTools();
   const selected = opts.names ? defs.filter((d) => opts.names!.includes(d.name)) : defs;
+  if (opts.names) {
+    const missing = opts.names.filter((name) => !defs.some((d) => d.name === name));
+    if (missing.length) opts.onMissing?.(missing);
+  }
   const registered: string[] = [];
   for (const def of selected) {
     const localName = `${opts.prefix ?? 'mcp_'}${def.name}`.slice(0, 64);

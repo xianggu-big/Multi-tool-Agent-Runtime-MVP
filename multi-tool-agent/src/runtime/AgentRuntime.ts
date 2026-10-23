@@ -1994,6 +1994,9 @@ export class AgentRuntime {
     // run_tests 是「在目标仓库执行代码」的能力：默认关闭（安全默认），
     // 未开启时不进工具池——模型看不到它，也就不会白调一次再拿 DISABLED。
     const runTestsOn = input.allowRunTests ?? this.config.codebase.runTestsEnabled;
+    // MCP 工具只在「显式配置了 MTA_MCP_SERVERS + 工具白名单」时出现；
+    // 不进 code-edit 子 Agent（写路径必须留在沙箱/审批/apply-journal 内）。
+    const mcpTools = this.config.mcp?.toolNames ?? [];
     const pool =
       input.runType === 'codebase'
         ? [
@@ -2003,21 +2006,22 @@ export class AgentRuntime {
             ...(runTestsOn ? ['run_tests'] : []),
             'knowledge_search',
             'ask_user',
+            ...mcpTools,
           ]
         : input.runType === 'misc'
           ? // 只读：无写文件、无命令执行、无联网；submit_result 是唯一的「产出」通道
-            ['list_files', 'search_files', 'read_file', 'dir_stats', 'submit_result', 'ask_user']
+            ['list_files', 'search_files', 'read_file', 'dir_stats', 'submit_result', 'ask_user', ...mcpTools]
           : input.runType === 'orchestrator'
             ? // 主 Agent 的默认能力：只「派发」与「汇总」；可选开自检工具（只读）
               [
                 'delegate_subtasks',
                 'submit_orchestration',
                 ...(input.orchestration?.allowSelfTools ?? this.config.orchestrator.allowSelfTools
-                  ? ['list_files', 'search_files', 'read_file', 'dir_stats', 'knowledge_search']
+                  ? ['list_files', 'search_files', 'read_file', 'dir_stats', 'knowledge_search', ...mcpTools]
                   : []),
                 'ask_user',
               ]
-            : ['web_search', 'fetch_page', 'extract_evidence', 'compare_sources', 'knowledge_search', 'ask_user'];
+            : ['web_search', 'fetch_page', 'extract_evidence', 'compare_sources', 'knowledge_search', 'ask_user', ...mcpTools];
     if (input.allowedTools && input.allowedTools.length) {
       // 服务端校验：仅保留既在池内又已注册的工具，忽略未知/越权项
       return input.allowedTools.filter((t) => pool.includes(t) && this.registry.has(t));

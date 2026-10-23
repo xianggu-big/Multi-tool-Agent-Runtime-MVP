@@ -147,10 +147,12 @@ npm start                  # 5) 打开 UI，提交一个 codebase 任务
 
 | 任务类型 | 可用工具 | 权限 | 真实能力状态 |
 | --- | --- | --- | --- |
-| codebase | `search_files` `read_file` `list_files` `run_tests` | `codebase:read` `codebase:test` | 搜索/读取为真实本地 I/O；`run_tests` 为**受限白名单**真实子进程（默认关闭） |
-| research | `web_search` `fetch_page` `extract_evidence` `compare_sources` | `research:web` `research:read` | `web_search` 默认 **OFFLINE_MOCK**（非实时）；`fetch_page` 为真实网络 I/O 但**仅单元测试（mock fetch）验证**；`extract_evidence`/`compare_sources` 为真实逻辑 |
-| **misc** | `list_files` `search_files` `read_file` `dir_stats` `submit_result` | `misc:read` `misc:report` | **只读**：无写文件、无命令执行、无联网；`dir_stats` 为真实本地统计；结论通过终结性工具 `submit_result` 结构化提交。详见 `docs/MISC_AGENT.md` |
-| **orchestrator** | 主 Agent：`delegate_subtasks` `submit_orchestration`；子 Agent：各自契约里的工具 + `submit_finding` | `orchestrator:delegate` `orchestrator:report` / 子 Agent 见契约 | **多 Agent 编排**：主 Agent 拆分 → 并行派发子 Agent（各自独立上下文/预算/权限）→ 汇总核验。宽度≤4、深度≤1 由结构层强制。**写 spec `code-edit`（沙箱+审批）需在编排面板勾选「允许修改文件」授权本 run（默认不勾 = 只读）**。详见 `designs/multi-tool-agent-harness-design-v1.md` |
+| codebase | `search_files` `read_file` `list_files` `run_tests` `knowledge_search` `ask_user` | `codebase:read` `codebase:test` `knowledge:read` | 搜索/读取为真实本地 I/O；`run_tests` 为**受限白名单**真实子进程（默认关闭）；`knowledge_search` 走切块级 RAG；`ask_user` 缺关键信息时进入 `awaiting_user` |
+| research | `web_search` `fetch_page` `extract_evidence` `compare_sources` `knowledge_search` `ask_user` | `research:web` `research:read` `knowledge:read` | `web_search` 默认 **OFFLINE_MOCK**（非实时）；`fetch_page` 为真实网络 I/O 但**仅单元测试（mock fetch）验证**；`extract_evidence`/`compare_sources` 为真实逻辑 |
+| **misc** | `list_files` `search_files` `read_file` `dir_stats` `submit_result` `ask_user` | `misc:read` `misc:report` | **只读**：无写文件、无命令执行、无联网；`dir_stats` 为真实本地统计；结论通过终结性工具 `submit_result` 结构化提交。详见 `docs/MISC_AGENT.md` |
+| **orchestrator** | 主 Agent：`delegate_subtasks` `submit_orchestration` `ask_user`（可选自检工具：`list_files` `search_files` `read_file` `dir_stats` `knowledge_search`）；子 Agent：各自契约里的工具 + `submit_finding` | `orchestrator:delegate` `orchestrator:report` / 子 Agent 见契约 | **多 Agent 编排**：主 Agent 拆分 → 并行派发子 Agent（各自独立上下文/预算/权限）→ 汇总核验。宽度≤4、深度≤1 由结构层强制。**写 spec `code-edit`（沙箱+审批）需在编排面板勾选「允许修改文件」授权本 run（默认不勾 = 只读）**。详见 `designs/multi-tool-agent-harness-design-v1.md` |
+
+**MCP 外部工具（可选）**：设置 `MTA_MCP_SERVERS`（JSON 数组）后，服务启动时并行连接各 server，并按 `names` 白名单把工具桥接为 `mcp_<server>_<tool>`（权限统一 `mcp:call`）。codebase / research / misc 与开启自检工具的 orchestrator 可用；**code-edit 子 Agent 不注入 MCP 工具**（写路径必须留在沙箱/审批/apply-journal 内）。单个 server 连不上只标 `error` 并报 `MCP_UNAVAILABLE`，不影响服务；`GET /api/mcp` 查看状态（不含 token）。格式见 `.env.example`。
 
 **任务分流**：不知道选哪个 Agent 时用界面上的「自动分流」（或 `GET /api/task-router?goal=...`），规则式分流器会给出建议 + 置信度 + 理由 + 命中信号词（纯函数、不花模型钱）。
 

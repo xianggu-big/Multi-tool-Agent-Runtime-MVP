@@ -14,8 +14,20 @@ if (process.env.STREAM_LIVE_DELTAS === undefined) config.stream.liveDeltas = tru
 // Mock 演示节奏：让无 Key 的演示也能肉眼看到文本逐字输出（真实 Provider 不受此影响）。
 if (process.env.MOCK_STREAM_CHUNK_DELAY_MS === undefined) config.stream.mockChunkDelayMs = 25;
 
-const { app, errors, recovery } = createApp(config);
+const { app, errors, recovery, mcpRuntime } = createApp(config);
 const port = config.port;
+
+// 优雅退出：至少把 MCP 会话关掉（stdio/HTTP 连接不泄漏）；3s 兜底强制退出。
+let shuttingDown = false;
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const force = setTimeout(() => process.exit(0), 3000);
+    force.unref();
+    void mcpRuntime.close().finally(() => process.exit(0));
+  });
+}
 
 // 沙箱容器孤儿回收（M1'，原在 buildRuntime 内）：沙箱会话不跨进程，本次启动时残留的
 // mta-sb-* 必为上一次进程的孤儿。放在服务入口执行——buildRuntime 还被测试/演示脚本复用，

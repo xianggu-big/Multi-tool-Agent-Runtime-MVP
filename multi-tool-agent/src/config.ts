@@ -4,6 +4,7 @@
 import { getEnv, getBool, getInt, getList } from './env.js';
 import type { LLMGenerationParams } from './types.js';
 import { DEFAULT_PRESET_ID } from './llm/presets.js';
+import { parseMcpServers, type McpServerConfig } from './mcp/config.js';
 
 export interface RuntimeConfig {
   llmMode: 'mock' | 'openai';
@@ -77,6 +78,12 @@ export interface RuntimeConfig {
     maxWidth: number;
     maxDepth: number;
     resultChars: number;
+  };
+  /** MCP 客户端（Streamable HTTP）：默认不连接任何外部 server。 */
+  mcp: {
+    servers: McpServerConfig[];
+    /** 启动桥接成功后由 McpClientRuntime 回填；供工具池按 runType 暴露。 */
+    toolNames: string[];
   };
   /** 编排主 Agent 的默认预算 */
   orchestrator: {
@@ -179,6 +186,10 @@ export function loadConfig(): RuntimeConfig {
       // MVP 固定为 1：子 Agent 结构上无法再派子 Agent（ctx 不注入 spawnSubAgent）
       maxDepth: clamp(getInt('SUBAGENT_MAX_DEPTH', 1), 1, 2),
       resultChars: clamp(getInt('SUBAGENT_RESULT_CHARS', 800), 200, 4000),
+    },
+    mcp: {
+      servers: parseMcpServers(getEnv('MTA_MCP_SERVERS')),
+      toolNames: [],
     },
     orchestrator: {
       maxSteps: clamp(getInt('ORCH_MAX_STEPS', 8), 1, 20),

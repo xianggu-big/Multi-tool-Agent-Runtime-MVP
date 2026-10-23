@@ -3,9 +3,11 @@
 > 本项目代码在 `multi-tool-agent/`（注意：`multi-tool-agent/agents/AGENTS.md` 是**生成的子 Agent 契约文档**，与本文件无关，勿混淆）。
 > 本项目规模较大、自己已有一套文档体系（README / docs / reports），**改动前先读 `multi-tool-agent/reports/PROJECT_REPORT.md`**。
 
-## 当前状态（最后更新 2026-10-23；工程实测基线 2026-10-23 = **63 个测试文件 / 422 子测试 / 422 通过 / 0 失败 / 0 跳过 / 约 17s**；Docker 已启动，`40j` 已补跑通过）
+## 当前状态（最后更新 2026-10-23；工程实测基线 2026-10-23 = **64 个测试文件 / 428 子测试 / 428 通过 / 0 失败 / 0 跳过 / 约 19s**；Docker 已启动，`40j` 已补跑通过）
 
-> **✅ 契约门禁真实化 + 流式防卡死 + 评测扩到盲测/多文件（2026-10-23）**：`ToolRegistry.policySnapshot()` 把已注册工具的真实 permission/risk 交给 `validateSpecs()`，动态工具缺权限映射直接 error，`maxRiskLevel` 真正校验；`resolvePermissions()` 读注册表而非静态表。流式输出服务端按 `spanId+channel` 合并约 24ms，前端跳过 `llm_delta`、事件节点上限 500、文本增量 append、滚动 10fps，修“画面突然卡死”。真实编辑评测扩到 **26 条（20 引导 + 4 盲测 + 2 多文件）**，最新 **26/26（L2 26/26）**，833,082 tokens / $0.0248，单轮 95% Wilson 下界 **87.1%**。回归 `tests/59d`、`tests/62a~62c`、`tests/63a/63b`；全量 **422/422**。残余：自动审批仍是 `allow_once`，未覆盖 HTTP/UI 人工审批全链路；P1 MCP 主路径配置入口未做。
+> **✅ MCP 主路径配置入口已落地（2026-10-23）**：`MTA_MCP_SERVERS`（JSON 数组，`names` 白名单**必填**）→ `parseMcpServers()` fail-fast 校验 → `McpClientRuntime` 并行连接 → 工具名 `mcp_<server>_<tool>`、权限 `mcp:call` → 按 runType 进 codebase/research/misc/orchestrator 工具池（**code-edit 子 Agent 不注入**）。单 server 失败只标 `error` + 报 `MCP_UNAVAILABLE`，不拖垮服务；`POST /api/runs` 有界等待 10s；`GET /api/mcp` 安全状态（URL 去凭据/query/hash，token 不进状态与错误消息）。回归 `tests/64a~64f`；README §2 工具表补齐 `knowledge_search`/`ask_user`/orchestrator 自检工具。CI 已钉 `node:24.22.0`（BF-014：24.21 上 better-sqlite3 退出断言），run `39901350247` 全绿。**遗留**：附录 A 曾在 `HEALTH_CHECK_2026-10-23.md` 明文写入本机 MCPHub token 并随 `cff7786` 推出——工作区已脱敏，但历史仍含旧 token，需在 MCPHub 删除/轮换 `mta-probe`。
+
+> **✅ 契约门禁真实化 + 流式防卡死 + 评测扩到盲测/多文件（2026-10-23）**：`ToolRegistry.policySnapshot()` 把已注册工具的真实 permission/risk 交给 `validateSpecs()`，动态工具缺权限映射直接 error，`maxRiskLevel` 真正校验；`resolvePermissions()` 读注册表而非静态表。流式输出服务端按 `spanId+channel` 合并约 24ms，前端跳过 `llm_delta`、事件节点上限 500、文本增量 append、滚动 10fps，修“画面突然卡死”。真实编辑评测扩到 **26 条（20 引导 + 4 盲测 + 2 多文件）**，最新 **26/26（L2 26/26）**，833,082 tokens / $0.0248，单轮 95% Wilson 下界 **87.1%**。回归 `tests/59d`、`tests/62a~62c`、`tests/63a/63b`；全量 **422/422**。残余：自动审批仍是 `allow_once`，未覆盖 HTTP/UI 人工审批全链路（MCP 主路径配置入口已于同日补齐）。
 
 > **📦 GitHub 发布准备（2026-10-21）**：仓库已脱敏并**重写为单一干净提交**（`6d3406e`，243 文件）。排除 `.eval/`（本机实测脚本，含个人绝对路径）、`.agents/`（个人工作流配置）、`reports/runs/`、`*.db`；`.env` / `data/` / `.workbuddy/` / `.zcode/` 从未入库。扫描结果：跟踪文件里无 `xianggu`、无 `C:\Users…`、无 `D:\c学习数据结构…`、无真实密钥（仅 `sk-xxx` 占位）。根 `README.md` = GitHub 首页；`.github/workflows/ci.yml` 保留。**remote 已配置**（`origin` → `github.com/xianggu-big/Multi-tool-Agent-Runtime-MVP`）；远端 CI 曾失败（BF-010：契约文档 CRLF/LF 比较），修复后**终点 A 功能提交 `c12a394`** 的 run `39728277735` **全步骤绿**（npm ci / typecheck / agents:lint / npm test）。未附 LICENSE（默认保留所有权利，需要再补）。
 

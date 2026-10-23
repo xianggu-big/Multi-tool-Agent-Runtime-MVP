@@ -17,6 +17,41 @@
 
 ---
 
+## 0.5 用户需求与边界（本轮检查的前提）
+
+**产品定位**（用户原话）
+
+> 「我想做的其实是一个可以打磨我 ai 这方面认知和可以做到自用的 agent harness 平台」
+> 「我这个平台每次都是可以显示思考过程」
+
+**接下来要扩展的能力**（用户原话）
+
+> 「我想开始对这个平台搞 tool 和 prompt 和 skill 还有 mcp，钩子还有定时任务这些东西」
+
+**本轮反馈的痛点**（用户原话）
+
+> 「为什么有时候会出现画面突然卡死的问题，好了之后已经跑了好多回答了」
+> 「我希望每次一个对话的思考过程显示完了就不再界面显示了，就显示前几段话，然后完整的存进后台数据库里供 rag 库用」
+
+**由此确定的三条硬需求**
+
+1. **长任务全程可交互**：流式输出期间不能出现主线程级卡顿（画面冻结、点击无响应）。
+2. **思考过程可见但可收起**：流式时逐字显示；结束后折叠（保留全文、可展开），而不是丢弃。
+3. **显示与存储解耦**：界面显示策略不得决定数据留存策略；思考原文若需留档，走冷存储，不进向量索引。
+
+**明确不做**
+
+- **不做 To C 平台化**（鉴权 / 多租户 / 计费 / 分发 / 合规）——定位是本地自用，见 `docs/PRODUCT_READINESS.md`。
+- **不做「截断思考 + 全量入 RAG」**——理由见 P0-3「已否决方案」。
+- **本轮不改代码**：只产出诊断、证据与建议；实际修改由用户自己的 code agent 执行。
+
+**独立需求（不在本轮范围，避免混在一起做）**
+
+- **界面美观**（视觉设计）——与渲染性能无关，单独处理。
+- **省 token 的上下文 / skill 策略**——单独处理。
+
+---
+
 ## 1. 检查范围与实跑结果
 
 | 检查项 | 方法 | 结果 |
@@ -91,6 +126,14 @@
 **现象**（用户原述）：运行过程中画面突然卡住不更新、点不动；过一阵恢复后，发现模型已经跑了很多轮/出了很多回答。
 
 **结论**：**服务端没有停，是浏览器主线程被渲染任务占满**。模型与 SSE 一直在跑，消息在浏览器里排队；主线程空出来后积压的帧一次性消费 → 看起来「突然好了，而且已经跑了好多」。
+
+**归属说明（重要，避免误派工）**
+
+- **根因在前端渲染层**（`public/index.html`），**不是后端**。
+- 后端只有两个「放大器」，都不是根因：
+  1. `Tracer.delta` 对每个 provider chunk 发一帧（未合并）→ 前端每秒被喂几十到上百次更新；
+  2. `res.write()` 不处理背压（`src/server.ts:842-851` 只 `res.write` 不看返回值）→ 只影响服务端内存，不会让浏览器卡死（`docs/ARCHITECTURE.md §7.19` 已登记）。
+- 因此：**改 `Tracer.ts` 合并增量只是「止血」，修复位置可以在后端；根治必须落在前端**。只改后端不能宣称已修复。
 
 **四条根因（按贡献度）**
 
@@ -265,7 +308,7 @@
 
 **服务**：容器 `epic_satoshi` / `samanhappy/mcphub` v0.12.10，`0.0.0.0:8900→3000`，配置挂载 `D:/docker_profile/mcp_settings.json`。
 **认证**：`/api/*` 用 `x-auth-token`；`/mcp` 用 `Authorization: Bearer <bearerKey>`（登录 JWT 不适用于 MCP 端点）。
-**环境变更**：为验证链路，在 MCPHub 里创建了 bearer key `mta-probe`（token `mta-local-060079d6aaeb44ef`，`accessType=all`）。不需要时在界面删除，或 `DELETE /api/auth/keys/<id>`。
+**环境变更**：为验证链路，在 MCPHub 里创建了 bearer key `mta-probe`（token `<redacted-local-token>`，`accessType=all`）。不需要时在界面删除，或 `DELETE /api/auth/keys/<id>`。
 **安全提醒**：admin 密码仍是默认 `admin123`（接口返回 `isUsingDefaultPassword: true`），**不要把这个端口暴露到局域网/公网**。
 
 | server | 工具数 | 实测结论 |
@@ -335,7 +378,11 @@
 | P0-1 动态工具权限静默跳过 | ✅ 已修 | `ToolRegistry.policySnapshot()` + `validateSpecs({toolPermissionByName,toolRiskLevel})`；查不到权限映射直接 error；`resolvePermissions()` 读注册表。回归 `tests/62a/62b`；Linux `node:24` 容器等价 CI 通过 |
 | P0-2 `maxRiskLevel` 未校验 | ✅ 已修 | 按 `safe < low < medium < high` 校验 spec 内每个已注册工具；越界 error。回归 `tests/62c` |
 | P0-3 流式渲染把主线程打满 | ✅ 已修（结构性回归） | 服务端增量 24ms 合并；前端跳过 `llm_delta`、事件上限 500、文本增量 append、滚动 10fps、`content-visibility:auto`。回归 `tests/59d`、`tests/63a/63b`；尚未做浏览器 Performance 长任务量化 |
-| P1-3 MCP 主路径无配置入口 | ⏳ 未做 | 仍只在测试/脚本中桥接；下一轮接 `MCP_SERVERS_JSON` 或等价配置 |
-| P2-4 README 工具表漂移 | ⏳ 未做 | 下一轮用生成物回填工具/权限表 |
+| P1-3 MCP 主路径无配置入口 | ✅ 已修 | `MTA_MCP_SERVERS`（JSON 数组，`names` 白名单必填）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池（code-edit 子 Agent 不注入）；`GET /api/mcp` 安全状态；失败隔离 `MCP_UNAVAILABLE`。回归 `tests/64a~64f`（6 例） |
+| P2-4 README 工具表漂移 | ✅ 已修 | README §2 补齐 `knowledge_search` / `ask_user` / orchestrator 自检工具，并新增 MCP 配置段；`.env.example` 补 `MTA_MCP_SERVERS` 格式 |
 
 当天全量：**63 文件 / 422 子测试 / 422 通过 / 0 失败 / 0 跳过**；真实编辑评测扩到 26 条（20 引导 + 4 盲测 + 2 多文件）并 **26/26** 通过。
+
+> ⚠️ **密钥事件**：附录 A 曾把本机 MCPHub 的 bearer token 明文写入本文件，并随提交 `cff7786` 推到远端。
+> 工作区已替换为 `<redacted-local-token>`；**旧 token 仍存在于 Git 历史**。处置：优先在 MCPHub 删除/轮换 `mta-probe`，
+> 后续是否重写历史需单独确认（未经同意不做 force push）。
