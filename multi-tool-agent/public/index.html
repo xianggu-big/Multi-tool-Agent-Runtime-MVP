@@ -284,6 +284,9 @@
 <header>
   <h1>Multi-tool Agent Workbench</h1>
   <div class="sub">同一套 Agent Runtime 驱动 Codebase Agent 与 Research Agent · 实时流式展示（思考 / 工具调用 / 结果）· 轻量可观测</div>
+  <div class="sub" style="margin-top:6px">MCP：<span id="mcpState">检测中…</span>
+    <button class="btn-ghost" id="mcpReconnect" type="button" style="font-size:11px;padding:2px 8px;margin-left:6px;display:none">重连</button>
+  </div>
 </header>
 
 <div class="layout">
@@ -3076,6 +3079,37 @@
     }
     $('sources').innerHTML = html || (r.isMock ? '<div class="src">（Mock 模式，来源为离线资料，非真实联网）</div>' : '');
   }
+
+  // MCP 状态条：未配置时不打扰；配置了但连不上时，用户可直接重连（不用重启进程）。
+  async function refreshMcp() {
+    const el = $('mcpState');
+    const btn = $('mcpReconnect');
+    try {
+      const s = await (await fetch('/api/mcp')).json();
+      if (!s.configured) {
+        el.textContent = '未配置（MTA_MCP_SERVERS 为空）';
+        btn.style.display = 'none';
+        return;
+      }
+      el.textContent = (s.servers || []).map((x) => `${x.name}:${x.state}${x.toolCount ? `(${x.toolCount})` : ''}`).join(' · ') || '—';
+      btn.style.display = 'inline-block';
+    } catch {
+      el.textContent = '状态不可用';
+    }
+  }
+  $('mcpReconnect').onclick = async () => {
+    const btn = $('mcpReconnect');
+    btn.disabled = true;
+    btn.textContent = '重连中…';
+    try {
+      await fetch('/api/mcp/reconnect', { method: 'POST' });
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '重连';
+      await refreshMcp();
+    }
+  };
+  refreshMcp();
 </script>
 </body>
 </html>

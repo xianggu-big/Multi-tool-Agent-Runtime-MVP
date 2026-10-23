@@ -101,7 +101,8 @@
   回归 `tests/44h`。
 - **T4 MCP 手动重连**：`McpClientRuntime.reconnect(name?)` + `POST /api/mcp/reconnect`（无 body = 全部）。
   重连前先摘掉旧工具再重注册（`ToolRegistry.unregister`），失败仍按 server 隔离；注册到一半失败会清理半截工具。
-  `tests/64i` 实测 error → ready 恢复；`tests/64j` 覆盖 400/404。
+  `tests/64i` 实测 error → ready 恢复；`tests/64j` 覆盖 400/404。前端 header 增加 MCP 状态条与「重连」按钮
+  （未配置时只显示提示；Edge headless 实测 DOM 已渲染为「未配置（MTA_MCP_SERVERS 为空）」）。
 - **T5 真实模型自主选 MCP 工具**：新增 `npm run mcp:e2e`。真实 DeepSeek、本进程 `/mcp`、临时 DB；
   以**落盘事件**为准断言模型发起了 `mcp_hub_knowledge_stats` 调用。两次运行：修复前 9,487 tok / $0.000613 / 7.1s，
   修复后 **3,756 tok / $0.000127 / 2.8s**（差异来自 `submit_result` 接受字符串简写，见下）。证据 `reports/MCP_WRITE_E2E.md`。
