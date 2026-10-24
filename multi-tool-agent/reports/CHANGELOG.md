@@ -14,6 +14,13 @@
 
 | 日期 | 参数 | 旧值 | 新值 | 原因 |
 |---|---|---|---|---|
+| 2026-10-24 | 新增 `MTA_HOST` | 未声明（Express 默认监听所有网卡） | **`127.0.0.1`** | 默认只允许本机访问；非回环监听必须显式配置 |
+| 2026-10-24 | 新增 `MTA_AUTH_TOKEN` | — | **空**（回环下不启用） | 监听非回环地址时强制要求 ≥32 字符；支持 Bearer / `x-mta-token` / HttpOnly Cookie |
+| 2026-10-24 | 新增 `MAX_ACTIVE_RUNS` | 无上限 | **64**（1~1024） | 防止接口/定时任务把进程堆爆；超过时 HTTP 返回 429 |
+| 2026-10-24 | 新增 `CLIENT_ERRORS_PER_MIN` | 无限制 | **30**（0 = 关闭） | 浏览器错误上报按 IP 限流，避免前端错误循环刷满日志 |
+| 2026-10-24 | 新增 `ERROR_LOG_MAX_BYTES` | 无轮转 | **10 MiB**（0 = 不轮转） | `errors.log` 超限轮转为 `.1`，避免长期运行写满磁盘 |
+| 2026-10-24 | 新增 `DATA_RETENTION_DAYS` | — | **30** | `/api/maintenance` 候选计算；不会自动删除 |
+| 2026-10-24 | 新增 `STREAM_MAX_CONNECTIONS` | 无上限 | **32**（1~1000） | 同时打开的 SSE 连接上限；超限 429 |
 | 2026-10-23 | 新增 `MTA_CODEX_ENABLED` / `MTA_CODEX_BIN` | — | **true / `codex`** | Codex 直连总开关与可执行文件；关闭后不接受 `runType=codex`，也不注册 `codex_exec` |
 | 2026-10-23 | 新增 `MTA_CODEX_MODEL` | — | **空**（用 `~/.codex/config.toml` 的 model） | 可选覆盖；本机 DeepSeek 端点只接受 `deepseek-flash` / `deepseek-v4-pro` |
 | 2026-10-23 | 新增 `MTA_CODEX_TIMEOUT_MS` / `MTA_CODEX_MAX_OUTPUT_BYTES` / `MTA_CODEX_REASONING_TAP` / `MTA_CODEX_SUMMARY_CHARS` | — | **600000 / 4MiB / true / 20000** | 单次上限、stdout 缓冲、rollout 旁路读取、答案回传上限 |
@@ -82,6 +89,36 @@
 ---
 
 ## 2026-10-24
+
+### 工作台换皮 Kinetic Orange（brutalist 橙黑白，纯前端）
+
+**为什么现在做**：用户给出「Kinetic Orange」风格提示词（橙 #FF4D00/黑/白、Archivo Black+Space Mono、2px 硬边、marquee、pill nav、hover 位移），要求结合项目功能适配。确认：全量替换蓝黑、**严格三色系统**（不用红绿功能色）、在线 Google Fonts+系统回退。
+
+- **实现方式**：整块重写 `<style>`（269 个旧选择器全覆盖断言,缺一 abort）——风格语言变化涉及边框/圆角/字体/动效,不再用 token 替换。
+- **设计系统**：纯黑四层表面（#000/#0a0a0a/#141414）+ 橙主色；顶层容器 2px 白硬边、内分隔 1px 白/22%；全部直角,唯一圆角=胶囊（CTA/页签/状态 pill/运行指示器）；display 字体 Archivo Black（大写、tracking -0.04em,回退 Arial Black/Impact）,标签/meta 全 Space Mono 大写；`accent-color` 橙。
+- **营销站元素→工作台映射**：pill nav→页签胶囊容器（active 橙底黑字）；hero→侧栏品牌标题；skewed marquee→**顶部橙色 ticker**（-0.5° 倾斜、无缝滚动,内容=真实状态：LLM 模式/模型/MCP/流开关/快捷键,`updateTicker()` 挂 refreshMcp+liveDeltas）；service list→复盘列表（CSS counter 橙编号 01/02 + hover 右移 + 45° 橙箭头揭示,零 JS 改动）；rotating indicator→运行灯改圆形：running=橙环 1.4s 旋转、completed=白实心、failed=橙实心带环、awaiting=橙闪烁；Giant CTA=「开始任务」橙底黑字胶囊 hover scale(1.08)。
+- **严格三色语义重映射**：成功/完成=白（边框+文字）,失败/限流/取消/审批/警告=橙（靠文字标签与实心/描边区分）,diff add=白、del=橙；SVG 瀑布图 `KIND_COLOR`=run 白/llm 橙/tool 浅橙/subtask 灰/answer 淡橙；JS 内联色 40 条规则映射,`--tint-*` 变量名保留（内联引用自动适配）。
+- **边界**：SSE 防卡死逻辑与 tests/59/61 断言字符串未触碰；ticker 动画纯 transform；Google Fonts 断网回退 Arial Black/Consolas。
+
+**验证**：`npm test` **482/482 / 0 失败 / 0 跳过**；浏览器实测 7 项全 PASS：黑底+橙 ticker、pill 页签橙底黑字、hover 位移/放大、复盘编号+箭头、Mock 任务（橙旋转圈→白实心、按钮胶囊）、黑底橙边直角 tooltip、`sb-title` 计算样式确认 Archivo Black 生效、无蓝黑残留、控制台零错误。
+
+### 后端运行时加固：默认安全 / 边界一致 / 无人值守与运维治理
+
+**为什么现在做**：用户要求「检查后端是否完善」并批准按三阶段修复。审计发现的问题不是功能缺失，而是**默认值和边界不一致**：服务默认监听所有网卡且无鉴权；定时任务可以绕过普通 API 的预算校验；无人值守的 MCP destructive 只硬拒绝、不进待确认；长期运行缺少限流、日志轮转、数据保留和优雅退出。
+
+**改动**：
+
+- **默认网络姿态**：`MTA_HOST` 默认 `127.0.0.1`；`assertHttpSecurity()` 在监听非回环地址且没有 ≥32 字符 `MTA_AUTH_TOKEN` 时**拒绝启动**。认证支持 `Authorization: Bearer`、`x-mta-token`、HttpOnly Cookie；`GET /?token=` 只做一次引导并 302，query token 不能再直接调 API；`/api/health` 公开。常量时间比较避免逐字符试探。**边界**：仍是单 token，没有 TLS/多用户。
+- **边界一致**：新增 `src/runtime/runLimits.ts`；HTTP 创建任务与定时任务共用 `parseRunLimits()`（存在但不可解析的字段必须报错，不能静默忽略）。定时任务的 `options.llm.params` 复用 `parseGenerationParams`，`orchestration.maxWidth` 限制到 `config.subagent.maxWidth`；PATCH 保留已有 provider/model/params。执行历史脏记录用 `sanitizeRunLimits()` 收敛。`runNow()` 与 tick 共用防重叠判断，重叠返回 409。
+- **MCP 高危操作**：无人值守时 `destructiveHint=true` 不再硬拒绝，改为写入 `pending_actions(kind='mcp')`；用户确认后经 `McpClientRuntime.callTool()` 直接调用（重新校验 server 存在、白名单、ready）。参数超过 16k 字符 fail-closed；含 token/key/secret/password 等敏感字段的调用返回 `MCP_ARGS_SENSITIVE`，**不入队**，避免凭据落库；审批摘要与 UI 参数预览也递归脱敏。UI 显示 server/tool、参数摘要与污点警告。
+- **运维治理**：`/api/health` 聚合 DB/MCP/RAG/调度器（DB 故障 503）；`/api/client-errors` 按 IP 固定窗口限流；`errors.log` 超限轮转；`GET /api/maintenance` 只读展示候选与文件大小，`POST /api/maintenance/prune` 必须 `confirm:true`，只删终态且未被待确认/定时任务引用的旧 run；SSE 增加连接上限与慢消费者丢弃临时 delta；SIGINT/SIGTERM 依次停调度、中止在飞 run、关 MCP、flush 事件、关 DB（5s 兜底）。
+- **可用性补口**：所有响应加 `X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` / `CORP` / `noindex`，API 加 `Cache-Control: no-store`；设置侧栏新增「系统状态 & 数据清理」（展开时拉 health + maintenance，候选为 0 时禁用清理按钮，删除前二次确认）；补 `MAX_ACTIVE_RUNS` 的回归测试（第二个 enqueue 必须抛 `TOO_MANY_ACTIVE_RUNS`，取消后可恢复）。
+
+**影响**：默认部署不再对局域网裸奔；普通 API 与定时任务不再有两套预算语义；无人值守的 MCP 副作用可审计、可延后决定；长期运行不会因错误日志/连接/旧 run 无限增长。**未做**：TLS、多用户、细粒度权限；MCP 待确认执行时无法像删除那样用哈希判断参数是否过期；RAG 双轨仍未统一。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **482/482 通过、0 失败、0 跳过**（78 个测试文件）；新增 `tests/73`~`tests/78` 覆盖回环/token、调度边界、MCP 待确认与脱敏、限流/轮转/健康、数据保留、SSE 上限、并发上限。`npm run agents:lint` 通过。
+
+**文件**：`src/config.ts`、`src/index.ts`、`src/server.ts`、`src/runtime/{runLimits,rateLimit,PendingActionService,AgentRuntime,errorReporter,index}.ts`、`src/mcp/{bridge,bootstrap}.ts`、`src/scheduler/{service,types}.ts`、`src/store/SqliteStore.ts`、`src/security/redact.ts`、`public/index.html`、`.env.example`、`tests/73~77`、`README.md`、`docs/{SECURITY_BOUNDARIES,CODEX_AND_SCHEDULES}.md`。
 
 ### 工作台打磨八项：tooltip 分级 / 键盘可达 / 侧栏 sticky / 窄屏响应 / 写路径深色实测（纯前端）
 

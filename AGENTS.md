@@ -3,7 +3,11 @@
 > 本项目代码在 `multi-tool-agent/`（注意：`multi-tool-agent/agents/AGENTS.md` 是**生成的子 Agent 契约文档**，与本文件无关，勿混淆）。
 > 本项目规模较大、自己已有一套文档体系（README / docs / reports），**改动前先读 `multi-tool-agent/reports/PROJECT_REPORT.md`**。
 
-## 当前状态（最后更新 2026-10-24 第九轮；工程实测基线 2026-10-24 = **72 个测试文件 / 465 子测试 / 465 通过 / 0 失败 / 0 跳过**（Docker 已启动，沙箱用例回归））
+## 当前状态（最后更新 2026-10-24 第十一轮；工程实测基线 2026-10-24 = **78 个测试文件 / 482 子测试 / 482 通过 / 0 失败 / 0 跳过**（Docker 已启动，沙箱用例回归））
+
+> **✅ 工作台换皮 Kinetic Orange（2026-10-24 第十一轮，纯前端）**：按用户提供的 brutalist 风格提示词适配工作台——整块重写 `public/index.html` `<style>`（269 旧选择器全覆盖断言），纯黑 #000/#0a0a0a 表面 + 橙 #FF4D00 主色 + 白字，2px 硬边全直角（唯一圆角=胶囊），Archivo Black/Space Mono（Google Fonts+回退）；营销站元素映射为工作台组件：pill 页签容器（active 橙底黑字）、顶部橙色状态 ticker（`updateTicker()` 真实 LLM/MCP/流状态跑马灯，-0.5° 倾斜）、复盘列表 CSS counter 橙编号+hover 右移+45° 箭头、圆形运行指示器（running=橙环 1.4s 旋转/completed=白点/failed=橙实心环/awaiting=橙闪烁）、CTA 橙底黑字胶囊 hover scale；**严格三色状态语义**（成功=白、失败/审批/警告=橙靠标签与实心/描边区分，无红绿），JS/SVG 40 条色映射，`--tint-*` 变量名保留自动适配。SSE 防卡死逻辑与 tests/59/61 守卫未触碰；`npm test` 482/482；浏览器实测 7 项全 PASS（含字体生效、无蓝黑残留、零 console 错误）。明细 `reports/CHANGELOG.md` 2026-10-24「Kinetic Orange」条目。
+
+> **✅ 后端运行时加固（2026-10-24 第十轮，P0+P1+P2）**：① **默认网络姿态** `MTA_HOST=127.0.0.1`；非回环监听必须配 ≥32 字符 `MTA_AUTH_TOKEN`（否则拒绝启动），支持 Bearer / `x-mta-token` / HttpOnly Cookie，query token 只允许首页引导，`/api/health` 公开（`tests/73`）。② **边界一致**：抽出 `runtime/runLimits.ts`，HTTP 与定时任务共用预算/生成参数/编排宽度校验；非法字符串不再被当成“没传”；`runNow` 与 tick 共用防重叠（409）；历史脏值执行前收敛（`tests/69f~h`）。③ **MCP destructive 无人值守**：进 `pending_actions(kind='mcp')`，确认后走 `McpClientRuntime.callTool()` 重新校验 server/白名单/ready；>16k 或含 token/key/secret/password 的参数 fail-closed，不入队；审批摘要/UI 递归脱敏（`tests/44i`、`tests/74`）。④ **运维治理**：`/api/health` 聚合 DB/MCP/RAG/调度器（DB 故障 503）；`/api/client-errors` 按 IP 限流；`errors.log` 超 10MiB 轮转 `.1`；`/api/maintenance` 只读候选 + `prune` 必须 confirm，只删终态且未被引用旧 run；SSE 连接上限 + 慢消费者丢临时 delta；并发 run 上限（429）；SIGINT/SIGTERM 停调度→中止在飞 run→关 MCP→flush→关 DB（`tests/75`~`78`）。⑤ **可用性补口**：基础安全响应头 + API `no-store`；设置侧栏「系统状态 & 数据清理」可直接看 health/候选并二次确认清理。**仍无 TLS/多用户**；MCP 待确认无法像删除那样做哈希过期复核。明细 `reports/CHANGELOG.md` 同日首条 + `BUGFIX_LOG` BF-015~017。
 
 > **✅ 工作台打磨八项（2026-10-24 第九轮，纯前端）**：tooltip 延迟分级（≤20 字 1s / 长说明 3s）+ 键盘 focus 触发；侧栏 sticky（视口内独立滚动）；`<900px` 单列响应式 + 窄屏首访默认收起；运行灯命中区 `::before inset:-6px`；Mock 模式按任务类型自动填演示剧本（手动选择不覆盖）；**写路径深色实测通过**（真 DeepSeek 编排写任务：审批卡/diff/瀑布图可读，落盘 completed，真实任务 +1 → 415/71）。`npm test` 465/465；确定性合成事件测试全命中。明细 `reports/CHANGELOG.md` 2026-10-24「打磨八项」条目。
 
@@ -68,7 +72,7 @@
 - 轻量级 Agent Runtime MVP：一套共享 Agent Loop 驱动 codebase / research / misc / orchestrator 四类 Agent；可运行、可测试、可演示，非生产系统。
 
 **已确认的结论与约束（2026-10-15 实机复验）**
-- 工程健康度（2026-10-23 实跑）：`npm run typecheck` 0 错误；`npm test` **63 文件 / 422 子测试 / 422 通过 / 0 跳过 / 0 失败 / 约 17s**；`npm run agents:lint` 三项门禁通过；`eval:edit` **7/7**；`eval:edit:real` **26/26**；4 个 Mock demo 的最近记录仍为 completed。
+- 工程健康度（2026-10-24 实跑）：`npm run typecheck` 0 错误；`npm test` **78 文件 / 482 子测试 / 482 通过 / 0 跳过 / 0 失败 / 约 22s**；`npm run agents:lint` 三项门禁通过；`eval:edit` **7/7**；`eval:edit:real` **26/26**；4 个 Mock demo 的最近记录仍为 completed。
 - M1/M1' 写能力：默认**可用**（`CODEBASE_WRITE_ENABLED` 默认 true，部署可显式 false 整机禁用）；写操作走「本 run 界面显式授权（「允许修改文件」开关 → `allowWriteSpecs`）→ 沙箱阶梯 → 一次批量审批 → 落盘 → 宿主复验（失败自动回滚）」；`code-edit` 是唯一可写 spec。实测四修：快照自引用崩溃 / hostVerify 继承运行期 env 致恒失败回滚 / 分类器被测试名污染 / 容器内套件 2 条平台假设失败——都带回归守卫（40k/40l/39i）。
 - 真实模型（deepseek-flash，Key 来自系统用户级环境变量 `DEEPSEEK_API_KEY`，`.env` 留空即可）：
   - 单 Agent 冒烟通过（2 步 / 1781 tok / $0.00015 / 104 流式帧）。
