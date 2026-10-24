@@ -90,6 +90,39 @@
 
 ## 2026-10-24
 
+### 前后端接口联调 + 关键接口压测（报告，只读核查）
+
+**为什么现在做**：用户要求盘点前端改动、排查接口联调、压测关键接口。
+
+- **联调**：探针覆盖 `index.html` 全部 44 处 fetch/EventSource → 33 个去重端点，路径/方法/响应形状**全对齐，零缺陷**（`/api/health` 前端读 `components.db` 与后端形状一致；POST run→终态→附属端点全链通）。
+- **压测**（Mock 模式、本机回环、10/50/100 三档并发）：读接口 2400-6100 rps、p99 ≤70ms、**总错误率 0%**；混合读负载 2542 rps p99 27ms。
+- **瓶颈 ①**：`GET /api/runs` 列表 ~291 rps（每请求 33ms——`recordToResult` 对 50 行全量 `JSON.parse(resultJson)`；建议列表投影不解析 resultJson + createdAt 索引；当前前端未消费此端点，属 API 面债务）。
+- **瓶颈 ②**：静态首页 sendFile 每请求读 213KB 磁盘（~930 rps 封顶；建议进程内缓存+ETag，优先级低）。
+- **方法学缺口（如实声明）**：SSE 上限（`maxConnections=32`，`server.ts:1317` 以 429 强制）用已完成 run 测不出——连接存活 <1s，需对活跃 run 建流才能验证触发路径。
+- **产物**：`reports/API_LOAD_TEST_2026-10-24.md`（含复现命令与边界声明）；脚本 `.eval/api-integration-probe.mjs`、`.eval/api-load-test.mjs`（本机，不入库）。压测产生 60 条 Mock run 噪声（能力口径排除 Mock）。
+
+### RAG 双轨统一：`data_vec` 停写，三种检索模式共用切块级 RAG
+
+**背景**：此前 `putData` 同时维护 `data_vec`（sqlite-vec + 256 维 HashEmbedder）和 `rag_chunks`（切块级 RAG）：双写、双份存储、两套分数；`/api/knowledge/search` 与 Agent 的 `knowledge_search` 可能对同一问题给出不同答案。
+
+**改动**：
+- 新增 `KnowledgeHub.searchKnowledge(q,{mode,limit,collection})`：keyword→BM25、semantic→向量、hybrid→RRF+rerank；chunk 命中按 `docId` 聚合（取最高分块，`chunkHits` 记命中块数），返回 `score / normalizedScore / matchedBy / chunkId`。
+- `searchSemantic` / `searchHybrid` 改为 async 兼容包装；`putData`/`deleteData` 不再 upsert/remove `data_vec`，唯一向量存储是 `rag_chunks`（doc_hash 增量 + 删除级联）。
+- `GET /api/knowledge/search` 三种 mode 同管线并支持 `collection` 元数据过滤；响应新增 `engine / ragMode / latencyMs / timings`，keyword 仍返回 `items`、其余仍返回 `hits`。
+- `stats().vector` 改为 RAG 口径 `{engine:'rag',built,embedder,dim,docs,chunks,count}`；`GET /api/rag/status` 增加 `legacyVector.active=false`。
+- 新增 `npm run rag:cleanup-legacy`：默认 dry-run，`--yes` 才 DROP 历史 `data_vec`，`--vacuum` 可选回收磁盘（先停服务）。
+- `ingest-docs --replace` 显式调用 `ragStore.removeDocs()`，避免旧块在替换后仍被召回。
+- **修 bug（BF-018）**：知识库删空后查询抛 `FlatIndex 查询维度不一致：256 vs 0`（空索引没有维度）；`FlatIndex.search` 空表直接返回空，`RagPipeline.search` 无 chunk 时不再跑 embedding。
+- **修 bug（BF-019）**：新库执行 `ingest-docs --replace` 时无条件 prepare 不存在的 `data_vec` → 整个替换回滚；改为先探测表再 prepare，并显式清 `rag_chunks`。
+
+**影响**：同一查询不再有两套结果；写入只维护一份向量；旧库的 `data_vec` 不再增长。代价：`searchSemantic`/`searchHybrid` 由同步变异步（仓内调用点已同步改），HTTP 语义检索会触发一次 RAG 增量构建。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **79 文件 / 490 子测试 / 490 通过 / 0 失败 / 0 跳过 / 约 23s**；`npm run agents:lint` 三项通过。新增 `tests/79_rag_unified.test.ts` 8 例（单一写入、三模式、文档级去重、collection 过滤、级联删除、统一统计、HTTP 路由、`--replace` 无 `data_vec` 回归）；`tests/28` / `tests/32g3` 改为统一路径断言。
+
+**文件**：`src/knowledge/index.ts`、`src/knowledge/ragPipeline.ts`、`src/knowledge/vectorIndex.ts`、`src/knowledge/vectorRecall.ts`、`src/server.ts`、`scripts/ingest-docs.ts`、`scripts/doctor.ts`、`scripts/cleanup-legacy-vector.ts`、`tests/28`、`tests/32`、`tests/79`、`docs/{ARCHITECTURE,KNOWLEDGE_SYSTEM,RAG_AND_AGENT_STACK,SUBAGENT_LIFECYCLE_AND_KNOWLEDGE,INTERACTION_PERSISTENCE_PLAN}.md`、`README.md`。
+
+**教训**：双轨最贵的不是多写一份向量，而是同一个问题有两个答案；先把「唯一检索入口」定下来，再谈索引选型。
+
 ### 工作台换皮 Kinetic Orange（brutalist 橙黑白，纯前端）
 
 **为什么现在做**：用户给出「Kinetic Orange」风格提示词（橙 #FF4D00/黑/白、Archivo Black+Space Mono、2px 硬边、marquee、pill nav、hover 位移），要求结合项目功能适配。确认：全量替换蓝黑、**严格三色系统**（不用红绿功能色）、在线 Google Fonts+系统回退。
