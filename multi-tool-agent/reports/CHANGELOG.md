@@ -90,6 +90,39 @@
 
 ## 2026-10-24
 
+### 压测报告复核修正：429/SSE 两节由"未验证"补为实测（报告修订 + 补测探针）
+
+**为什么现在做**：复核 `reports/API_LOAD_TEST_2026-10-24.md` 发现两处方法学缺陷：① POST 压测总共只发 60 个请求（< `MAX_ACTIVE_RUNS` 默认 64），429 写入上限在测试设计上就不可能触发，但报告写成"0%（含 429/400 拦截路径均符合预期）"，属误导性表述；② SSE 用已完成 run 测（回放 <1s、连接交错关闭），对"上限是否生效"信息量为零，且未说明回放连接同样计入上限（`server.ts:1317` 在回放前检查并计数）。
+
+**改动**：
+- 报告措辞修正：§3 POST 行标注"n=60<上限 64"；SSE 段改明"这组数字对上限信息量为零"；"总错误率"行改为"400 已验证、429 未被触发（方法学缺陷而非符合预期）"；§4④"写路径无需改动"的依据改为 §3.1 补测；§6 补样本量声明（GET 每档 n=100/300/600，POST 仅 60，单轮未取中位）。
+- 新增报告 §3.1 补测：隔离实例（`PORT=3100` + 独立 `SQLITE_PATH`/`ERROR_LOG_PATH`，主库零污染）+ 小阈值（`MAX_ACTIVE_RUNS=4`、`STREAM_MAX_CONNECTIONS=2`）使上限可触达。实测：POST 20 并发 → **4 created（正好=上限）+ 16× 429**（`TOO_MANY_ACTIVE_RUNS：当前有 4 个活动任务，上限 4`，66ms），run 全部终态后恢复 201；对活跃 run 开 4 条 SSE → **2× 200 + 2× 429（Retry-After: 5）**，终态后 `/api/stream/stats` 回落 0、重连回放 200（计数释放正确）。
+- 新增探针 `.eval/api-limit-probe.mjs`（本机，不入库；产物 `.eval/limit-probe-results.json`）；报告 §5 补两条复现命令。
+- 文档地图补登记：README §7 与 PROJECT_REPORT §8 加入 `API_LOAD_TEST_2026-10-24.md`（上轮漏登记）。
+
+**影响**：报告从"读路径可信、写路径/SSE 无效测试"变为全链路可引用——两条 429 路径行为与代码一致（写入上限按活跃数精确拦截且释放后可恢复；SSE 上限只对存活连接计数、终态回放快速释放）。今后新增上限类端点可直接复用"小阈值隔离实例"的测法。
+
+**验证**：`.eval/api-limit-probe.mjs` 两项判定 PASS；探针实例已停、`data/probe-limit/` 已删，主服务 3000 全程未受影响。本轮纯文档 + 本机探针，未改 `src/`，不触发生成物重生；工程基线仍为 79 文件 / 490 子测试 / 490 通过。
+
+**文件**：reports/API_LOAD_TEST_2026-10-24.md、reports/PROJECT_REPORT.md（§8）、README.md（§7）、AGENTS.md（当前状态）、.eval/api-limit-probe.mjs（不入库）。
+
+### Harness 评测标准 v1.0：先定尺子，不先报分数（纯文档）
+
+**为什么现在做**：现有证据能证明测试多、链路跑通、编辑管线可用，但不能直接回答“这个 harness 相对裸工具循环到底好多少”。需要先把模型能力、harness 能力、任务难度分开，把成功率、失败可控性、成本、延迟和可诊断性写成可复现的门槛。
+
+**改动**：
+- 新增 docs/HARNESS_EVALUATION_STANDARD.md：两条评测轨道（deterministic mechanics / real-model effectiveness）、B0/B1/B2/H 基线、任务契约、指标字典（EFF/REL/TOOL/SAFE/COST/LAT/OBS/CTX/EXT/REP）、故障注入矩阵、P0/P1/P2 门槛与 H0~H4 就绪等级。
+- 新增 eval/harness/task.schema.json、result.schema.json、scorecard.schema.json：任务、单次 attempt、聚合记分卡的机器可读契约。
+- 新增 eval/harness/tasks.example.jsonl：10 条覆盖 codebase/edit/research/misc/orchestration/rag/mcp/safety/long_context/recovery 的示例；明确不是正式评测集。
+- 新增 eval/harness/README.md 与 reports/HARNESS_SCORECARD_TEMPLATE.md：冻结、归档、新增任务、失败清单与空白记分卡的执行口径。
+- README.md 与 PROJECT_REPORT.md 的文档地图加入入口；根 AGENTS.md 当前状态标注“标准已定稿，尚未执行”。
+
+**影响**：以后说“harness 好”必须先给同一模型、同一任务集、同一预算下的 SR/pass^k/CPS/P95/安全不变量与 artifact；n=1 只能叫证据，Mock 不能混入真实模型成功率。当前项目尚未评级，不能据此宣称 H2/H3/H4。
+
+**验证**：本轮纯文档，未跑 npm test、未跑任何评测/基准、未改业务代码；仅对新增 JSON/JSONL 做静态解析、Ajv 2020 schema 编译与 10 条示例任务校验。工程基线仍为上一轮 79 文件 / 490 子测试 / 490 通过 / 0 失败 / 0 跳过。
+
+**文件**：docs/HARNESS_EVALUATION_STANDARD.md、eval/harness/{README.md,task.schema.json,result.schema.json,scorecard.schema.json,tasks.example.jsonl}、reports/HARNESS_SCORECARD_TEMPLATE.md、README.md、reports/PROJECT_REPORT.md、AGENTS.md。
+
 ### 前后端接口联调 + 关键接口压测（报告，只读核查）
 
 **为什么现在做**：用户要求盘点前端改动、排查接口联调、压测关键接口。

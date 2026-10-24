@@ -27,7 +27,7 @@ npm run demo:orchestrator # 多 Agent 编排：主 Agent 拆分 → 并行子 Ag
 # 5) 契约文档与门禁（文档从契约生成，防止"文档与实现漂移"）
 npm run agents:docs      # 从 src/agents/specs.ts 生成 agents/*.md
 npm run agents:lint      # 契约一致性门禁：自校验 + 文档漂移 + 工具存在性
-# 6) 首跑体检（Node ABI / sqlite-vec / Docker 镜像 / 端口 / Key；有 fail 退出 1）
+# 6) 首跑体检（Node ABI / Embedding 服务 / Docker 镜像 / 端口 / Key；有 fail 退出 1）
 npm run doctor
 # 7) 启动 HTTP 服务 + 前端
 npm start
@@ -89,7 +89,7 @@ npm run e2e:write           # 写能力全链路：HTTP → 沙箱 → 审批 �
 | `npm run demo:misc` | `status=completed`，2 步；输出结构化结论 |
 | `npm run demo:orchestrator` | 2 个子任务并行且均 `ok`；汇总里如实列出未解决项 |
 | `npm run agents:lint` | 三项门禁全过 |
-| `npm run doctor` | Node / sqlite-vec / 数据目录 / 端口为 ok；Docker 与 Key 可为 warn |
+| `npm run doctor` | Node / 数据目录 / 端口 / Embedding 探针为 ok；Docker 与 Key 可为 warn（sqlite-vec 只作为旧表兼容项） |
 | `npm start` | 打开 `http://localhost:3000`，右侧五个页签：实时 / 事件流 / 流程监控 / 错误 / 复盘 |
 
 ### 1.2 最小验证路径（怀疑环境有问题时按这个顺序）
@@ -176,6 +176,7 @@ flowchart LR
 - `params.extra` 可直通厂商新参数，但 `model`/`messages`/`tools`/`stream` 等由 Runtime 掌控的键会被拦截。
 - 「测试连接」对目标地址做 SSRF 防护：允许公网与本地回环（本地 Ollama 等），禁止云元数据与其他私网。
 - 当前是**本地 HTTP，无 TLS**：Key 会以明文在浏览器→服务端之间传输。请勿把该服务暴露到公网。
+- 服务默认只绑定 `127.0.0.1`。改成 `0.0.0.0` 或局域网 IP 时，启动期会强制要求 `MTA_AUTH_TOKEN`（至少 32 字符）；浏览器首次用 `/?token=<token>` 写入 HttpOnly Cookie，之后同源请求自动携带。`/api/health` 保持公开。
 - ⚠️ **不要把真实 Key 写进 `.env.example`**（那是提交给 Git 的模板）；写 `.env`（已被忽略）或用界面填写。
 
 ## 2. 四种 Agent 的能力边界
@@ -186,8 +187,11 @@ flowchart LR
 | research | `web_search` `fetch_page` `extract_evidence` `compare_sources` `knowledge_search` `ask_user` | `research:web` `research:read` `knowledge:read` | `web_search` 默认 **OFFLINE_MOCK**（非实时）；`fetch_page` 为真实网络 I/O 但**仅单元测试（mock fetch）验证**；`extract_evidence`/`compare_sources` 为真实逻辑 |
 | **misc** | `list_files` `search_files` `read_file` `dir_stats` `submit_result` `ask_user` | `misc:read` `misc:report` | **只读**：无写文件、无命令执行、无联网；`dir_stats` 为真实本地统计；结论通过终结性工具 `submit_result` 结构化提交。详见 `docs/MISC_AGENT.md` |
 | **orchestrator** | 主 Agent：`delegate_subtasks` `submit_orchestration` `ask_user`（可选自检工具：`list_files` `search_files` `read_file` `dir_stats` `knowledge_search`）；子 Agent：各自契约里的工具 + `submit_finding` | `orchestrator:delegate` `orchestrator:report` / 子 Agent 见契约 | **多 Agent 编排**：主 Agent 拆分 → 并行派发子 Agent（各自独立上下文/预算/权限）→ 汇总核验。宽度≤4、深度≤1 由结构层强制。**写 spec `code-edit`（沙箱+审批）需在编排面板勾选「允许修改文件」授权本 run（默认不勾 = 只读）**。详见 `designs/multi-tool-agent-harness-design-v1.md` |
+| **codex** | Codex CLI 自带的工具循环（不经内置 ToolRegistry） | — | **本机 Codex 直连**：只读分析直接在隔离副本上跑；写模式只改稳定副本，改动由 Runtime 导入现有 `submit_changes`（阶梯 → 审批/暂缓 → 落盘 → 宿主复验）。支持 `codex exec resume` 续问。详见 `docs/CODEX_AND_SCHEDULES.md` |
 
 **MCP 外部工具（可选）**：设置 `MTA_MCP_SERVERS`（JSON 数组）后，服务启动时并行连接各 server，并按 `names` 白名单把工具桥接为 `mcp_<server>_<tool>`（权限统一 `mcp:call`）。codebase / research / misc 与开启自检工具的 orchestrator 可用；**code-edit 子 Agent 不注入 MCP 工具**（写路径必须留在沙箱/审批/apply-journal 内）。单个 server 连不上只标 `error` 并报 `MCP_UNAVAILABLE`，不影响服务；`GET /api/mcp` 查看状态（不含 token）。格式见 `.env.example`。
+
+**Codex 直连（可选）**：`MTA_CODEX_ENABLED=true` 时，工作台「任务类型」多一个 **Codex Agent（本机 CLI）**，把任务交给本机 `codex exec`；也提供 `codex_exec` 工具与 `codex-code` 子 Agent 两个入口。写模式只改稳定副本，再由 Runtime 扫差异、`stage()`，复用现有 `submit_changes` 落盘；只读/写模式都支持 `codex exec resume` 续问。**定时任务**在「定时」页签管理（每天 HH:mm / 仅一次），无人值守时普通改动自动放行，**删除/宿主命令暂缓到「待确认」**，跑完由你决定。详见 `docs/CODEX_AND_SCHEDULES.md`。
 
 **任务分流**：不知道选哪个 Agent 时用界面上的「自动分流」（或 `GET /api/task-router?goal=...`），规则式分流器会给出建议 + 置信度 + 理由 + 命中信号词（纯函数、不花模型钱）。
 
@@ -214,6 +218,9 @@ flowchart LR
 - **复盘摘要（每次 run 结束都记）**：不管成功还是失败，终态都会自动落一份 `run_digest` —— 结论（`ok/errorCode/failureReason`）、资源计数、**过程中的错误聚合**（工具失败 / 运行时错误 / 子任务失败 / 审批拒绝 / 验证失败 / 回滚 / 注入命中，含次数与首个 seq）、以及一句话 `headline`。**成功也会记**（会写「完成，但过程另有 N 类问题」），进程被杀的 run 由启动回收补 `RUN_INTERRUPTED`。查看：`npm run digest:list`（默认只看有问题的）、`GET /api/digests`、`GET /api/runs/:id/digest`；落盘 `data/run-digest.jsonl`。详见 `docs/RUN_DIGEST.md`。
 - **复盘 / 压缩面板（R24）**：前端「复盘」页签可按问题/状态/类型筛选摘要，查看结论、首个问题、过程问题表、原始 JSON 与**上下文压缩观测**（次数/移除消息/深度/摘要字符/水位/窗口/是否触顶）；没有压缩时明确标注“未触发”。实时流会显示 `context_compacted` 卡片，`run_digest` 到达后自动刷新。回归 `tests/59`。
 - **多 Agent 编排（orchestrator）**：主 Agent 拆分 → **并行**派发子 Agent（有界并发池 + 级联取消 + 部分失败显式化）→ 汇总核验。子 Agent 由**契约（spec）**驱动：工具白名单、权限、预算、上报格式全部声明在 `src/agents/specs.ts`；`agents/*.md` 由契约**生成**，`npm run agents:lint` 做漂移门禁。界面「实时」可见每个子任务卡片，「流程监控」可见并行 span。详见 `designs/multi-tool-agent-harness-design-v1.md`。
+- **Codex 直连（外部 Agent 适配器）**：`runType='codex'` 直接驱动本机 `codex exec --json`，不走内置 LLM Loop；复用 run 记录/SSE/取消/审批/复盘。写模式只改稳定副本，再由 `scanCodexChanges` 导入现有 `submit_changes`；思考文本用 rollout 旁路读取（best-effort），失败自动降级为「命令+回答」。详见 `docs/CODEX_AND_SCHEDULES.md`。
+- **定时任务 + 无人值守安全策略**：进程内调度（每天 HH:mm / 仅一次，停服不补跑），预算/生成参数/编排宽度与普通 HTTP 任务共用同一套边界。普通改动自动放行；删除 / 宿主命令 / MCP destructive 暂缓进 `pending_actions`，跑完在「定时」页签汇总，由你点「执行 / 忽略」；执行删除前复核 `baseHash`，文件被改过则 `STALE_ACTION`。MCP 参数含 token/key/secret/password 等字段时**不入队**（避免凭据落库），只能走交互式人工审批。回归 `tests/69`~`tests/74`。
+- **运行时治理**：`/api/health` 聚合 DB/MCP/RAG/调度器状态（DB 故障返回 503）；`POST /api/client-errors` 按 IP 限流；`errors.log` 超限自动轮转为 `.1`；`GET /api/maintenance` 只读展示可清理的旧 run，`POST /api/maintenance/prune` 必须 `confirm:true` 才删除；SSE 有连接上限且慢消费者只丢临时 delta；收到 SIGINT/SIGTERM 时停止调度、中止在飞 run、关闭 MCP、flush 事件后退出。回归 `tests/73`~`tests/77`。
 - **受控写能力（沙箱 + 三级人工审批，UI 可用）**：编排模式下勾选「允许修改文件」后，`code-edit` 子 Agent 可修改文件——改动**先在 Docker 沙箱暂存并跑检查阶梯（语法/类型/测试）**，落盘前**弹出审批卡**由你决定（完全同意此文件 / 仅同意本次 / 拒绝），通过后落盘并跑宿主复验（失败自动回滚）。未勾选 = 只读（fail-closed，后端四处接线保证绕不过去）；检测到「修改文件」意图但未开启写能力时，界面会弹确认对话框引导（而不是静默不改）。部署可用 `CODEBASE_WRITE_ENABLED=false` 整机禁用。落盘后可手动发起「深度验证（L2）」并在 UI 查看通过/失败证据与取消状态。详见 `docs/WRITE_AND_APPROVAL.md`。
 - **崩溃对账 / 恢复（落盘意图日志）**：落盘前先把本批意图（原文哈希 / 新内容哈希 / 每个文件状态）写进 `data/backups/<runId>/apply-journal.json`。进程在「逐文件 rm→rename」窗口内被杀后，服务启动会扫描 `data/backups/*`，把每个文件判定为已落盘 / 未落盘 / 消失 / 冲突 / 未知；只自动恢复「编辑 + 文件消失 + 有备份」这一种确定性坏状态，已落盘的编辑/新增**不会**自动回滚。UI 会显示恢复卡，由你选择回滚或保留；旧版本无日志 / 日志损坏时只做人工比对。API：`GET /api/runs/:id/recovery`、`POST /api/runs/:id/recovery/rollback|accept`。详见 `docs/WRITE_AND_APPROVAL.md` §3.9。
 - **宿主复验能力探测**：落盘后不再假定仓库一定有 `tests/*.test.ts`。有 Node 原生测试 → 跑全量；没有测试但有 `tsconfig.json` + 本地 `tsc` → 降级类型检查并明确标注；两者都没有 → `unavailable`，**不阻断落盘**但如实告知「未经任何行为验证，请人工验收」。不会自动执行 jest/vitest 等任意 `npm test` 脚本。详见 `docs/WRITE_AND_APPROVAL.md` §3.10。
@@ -244,8 +251,8 @@ flowchart LR
 
 - 真实搜索的**端到端验证缺失**（无 Serper Key）；真实 LLM 仅 **DeepSeek 已验证**，其余预设未实测。
 - 检查点消息**无截断**，超长任务有内存增长风险。
-- HTTP API **无鉴权**（仅适合本地 / 内网）。
-- 前端为极简原型，**无鉴权、无并发多任务 UI、无历史对比**。
+- HTTP 默认**只监听 `127.0.0.1`**；要监听局域网/公网必须显式设置 `MTA_HOST` 并配置至少 32 字符的 `MTA_AUTH_TOKEN`，否则拒绝启动。仍**没有 TLS、多用户与细粒度权限**，跨机器使用请放在 HTTPS 反向代理之后。
+- 前端为极简原型，**只有单 token 访问控制、无并发多任务 UI、无历史对比**。
 - `run_tests` 白名单按「前缀包含」匹配，依赖 `shell:false` 兜底；若未来改为 shell 执行将失效（当前不会）。
 
 ---
@@ -295,6 +302,9 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 ## 7. 文档导航
 
 ### 📊 定期回看（核心项目报告 + 专项评测）
+- docs/HARNESS_EVALUATION_STANDARD.md —— Harness 评测标准 v1.0（只定标准，尚未执行）：两层轨道、B0/B1/B2/H 基线、任务契约、指标字典、故障注入矩阵、P0/P1/P2 门槛与 H0~H4 就绪等级。
+- eval/harness/ —— 可机器读取的评测契约：task/result/scorecard schema + 10 条示例任务 + 使用说明；示例不是正式评测集。
+- reports/HARNESS_SCORECARD_TEMPLATE.md —— 空白记分卡：先看 P0 gates，再看分维度指标；不允许只给一个总分。
 - `reports/AGENT_REPORT.md` —— **Agent 效果报告**（生成物，**每天 09:00 自动生成并播报**）：任务台账与效果指标 / 行为过程逐帧轨迹 / 能力边界实况 / 调参效果对比 / 与上次环比。`npm run report:agent`
 - `reports/PROJECT_REPORT.md` —— **一页读懂**：能力矩阵 / 实测指标 / 参数摘要 / 风险缺口 / 下一步 / 里程碑 / 验证命令。
 - `reports/CHANGELOG.md` —— **变更记录**：每条的背景/改动/影响/验证 + 顶部「参数变更总表」（旧值→新值→原因）。
@@ -302,8 +312,10 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/PARAMETERS.md` —— **参数台账**（生成物）：当前生效的全部预算与参数，`npm run report:params` 重新生成。
 - `reports/CODE_REVIEW_2026-10-13.md` —— **代码审查**（人写）：P0/P1/P2/P3 分级；**P2-7（无鉴权，仅本机）/ P3×3** 是当前未修清单，P0/P1/P2-1~6 已修并记在 CHANGELOG「安全修复收口」与 2026-10-19 追补。
 - `reports/PARALLEL_AB.md` —— **并行 vs 串行 A/B 量化**（人写）：换实验就加一节，保留「口径与边界」。
-- `reports/RAG_EVAL.md` —— **RAG P0 评测**（生成物）：切块/混合检索/rerank 质量 + Flat/HNSW/IVF 召回-延迟；`npm run rag:bench`。
+- `reports/RAG_EVAL.md` —— **RAG P0 评测**（生成物）：切块/混合检索/rerank 质量 + Flat/HNSW/IVF 召回-延迟；`npm run rag:bench`。评测语料已冻结在 `eval/rag-corpus/`（跨天可比；改 `docs/` 不会让历史数字漂移）。
 - `reports/RAG_ABLATION.md` —— **RAG 消融**（生成物）：chunk 大小/overlap 与 embedding 维度对 Recall/MRR/nDCG/存储的影响；`npm run rag:ablation`。
+- `eval/rag-corpus/` —— **评测语料冻结快照**（人维护）：`AGENTS.md` + `multi-tool-agent/{README,.env.example,reports/PROJECT_REPORT.md,docs/*.md}`。要更新语料就**显式**替换这里的文件，并接受历史数字失效。
+- `D:\数据集\lcc_python`（LCC_python 重打包，仅 `context`/`gt` 两列）**只能当索引压测素材**，不是问答/知识语料；不要灌进知识库。
 - `reports/RAG_IMPROVEMENT_2026-10-23.md` —— **RAG 命中率提升方案**（人写，只读）：为什么 vector 单路只有 55.6%（embedding 是词法哈希 + 评测集偏袒字面匹配）、六条提升路线（重建评测集 → 换 bge embedding → 多查询 → cross-encoder rerank → pre-filter → small-to-big）、三层指标清单与诊断映射、生成侧提示词、本机跑 R1 蒸馏版的可行性。
 - `reports/COMPACTION_AB.md` —— **上下文压缩 A/B**（生成物）：rolling vs legacy 的 30 run 真实模型对照、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论是 `not_proven`，不要外推成“滚动摘要更优”。
 - `reports/MCP_WRITE_E2E.md` —— **两条真实端到端证据**（人写）：`npm run mcp:e2e`（模型自主调用 MCP 工具）与 `npm run e2e:write`（HTTP → 沙箱 → 人工审批 → 落盘 → 宿主复验）的 token/耗时/事件、暴露的摩擦与边界。
@@ -316,13 +328,17 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/PROGRESS_2026-10-16.md` —— **进度快照**（一次性，非维护文档）：某一时点的模块完成状态 / 进行中 / 阻塞与风险分级；后续快照按需追加。
 - `reports/RUN_REVIEW_2026-10-16.md` —— **运行核查报告**（一次性）：某段实测会话的「agent 说法 vs 数据记录」逐条判定（127 项 / `*.html` 0 命中 / 写通道 / "委派虚构"质疑的核查 + 证据索引）。
 - `reports/HEALTH_CHECK_2026-10-23.md` —— **全身检查报告**（一次性）：初始门禁基线（416/416）、权限矩阵、问题清单与修复状态（P0 门禁/卡死、P1 MCP 主路径、P2 文档漂移均已完成）、MCPHub 环境实测与真实 E2E（附录 C/D）。
+- `reports/SUMMARY_2026-10-23.md` —— **当日总结与复盘**（一次性，人写）：知识库「导入 → 压测 → 持久化」的通俗解释（含术语小抄）、硬数据、做错/判断失误/遗憾清单、规模原则与下一轮验收标准。给非技术读者也能看懂。
 - `reports/UI_STREAM_PERF.md` —— **长流式渲染量化**（人写）：真实浏览器 + 真实 SSE 路径，5 万条增量 burst 下修复前后对照（阻塞 731ms → 217ms，DOM 节点 26 万 → 300）；`npm run perf:stream-ui`。
+- `reports/API_LOAD_TEST_2026-10-24.md` —— **接口联调 + 压测摸底**（一次性，人写）：33 端点联调 33/33、读接口 RPS/分位延迟、`GET /api/runs` 瓶颈归因、两条 429 上限路径小阈值实测；含复现命令与边界声明。
 - 改完代码请跑：`npm run report:refresh`（重新生成 **Agent 报告 + 参数台账 + 子 Agent 契约文档**）；跑了真实 run 或改了报告渲染后可 `npm run report:run -- --all`（重生 `reports/runs/`）；改了写路径/沙箱/审批后跑 `npm run eval:edit`（需 Docker，约 80s）；改了注入特征或安全边界后跑 `npm run security:redteam`（无需 Key）。
 
 - `docs/ARCHITECTURE.md` —— 架构、模块职责、真实 Agent Loop 流程、Tool Registry 安全边界、状态机与恢复、已知缺陷。
 - `docs/RAG_AND_AGENT_STACK.md` —— **RAG / Agent 应用栈实现手册**：chunk 与 embedding 取舍、HNSW vs IVF、RRF + rerank 实测、MCP / function calling、慢回答诊断、流式与中断、LangGraph / LoRA / vLLM 显存估算。
 - `docs/RUN_DIGEST.md` —— **复盘摘要手册**：每次 run 终态都写（成功也写/失败优先）、三落点、字段口径、`npm run digest:list` 用法、前端「复盘」页签与压缩观测的边界、6 条诚实边界。
 - `docs/HUMAN_IN_THE_LOOP.md` —— **人机协同手册**：ask_user 工具、awaiting_user 终态、与写操作审批的区别、问题落库/展示、回答后如何继续（新一轮 + contextHistory）。
+- `docs/CODEX_AND_SCHEDULES.md` —— **Codex 直连 + 定时任务手册**：配置、界面用法、写路径（副本→导入→审批→落盘）、HTTP API、事件/结果字段与 7 条诚实边界。
+- `reports/CODEX_SCHEDULER_PLAN.md` —— **本轮实施方案**（人写）：需求/决策/数据表/接口/安全边界/分步验收。
 - `docs/PRODUCT_READINESS.md` —— **产品化路线**：从 MVP 到本地可用的代码 Agent 的验收阈值、四道门、简历叙事与“现在不该做什么”。
 - `docs/WRITE_PRINCIPLES.md` —— **写能力设计原则**（方针层）：写能力为何必须始终保留 / 与聊天机器人的关键差异 / 审核机制（四道闸）与回溯机制（四层）设计 / 反模式与自检清单。**改写路径前先读**。
 - `docs/SECURITY_BOUNDARIES.md` —— **安全边界**：不可信内容威胁模型、四层防线（结构/写入门禁/内容边界/审计恢复）、run 污点与审批降权、高危动作禁用粘性 + 当前批次二次确认、红队结果与诚实边界。

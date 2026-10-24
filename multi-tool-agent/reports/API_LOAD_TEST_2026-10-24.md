@@ -47,13 +47,24 @@
 | GET /api/schedules | 4432 | 20 / 42 / 43 | 0% |
 | GET /api/stream/stats | 5087 | 23 / 25 / 48 | 0% |
 | **GET /（静态首页 213KB）** | **930** | **109 / 141 / 143** | 0% |
-| POST /api/runs（Mock 入队） | 878 | 21 / 23 / 24（c=20） | 0%（未触发 429） |
+| POST /api/runs（Mock 入队） | 878 | 21 / 23 / 24（c=20） | 0%（n=60<上限 64，429 未被触发→§3.1） |
 | POST /api/runs（非法载荷→400） | 2405 | 19 / 23 | 0% |
 | 混合读负载（6 端点加权 c=50 × 10s） | 2542 | 19 / 24 / 27 | 0% |
 
-**SSE**：对**已完成 run** 开 10/30/60 并发连接全部 200——该 run 的流回放完即关闭，连接存活 <1s，**未触达 `maxConnections=32` 上限**（代码确认上限在 `server.ts:1317` 以 429+Retry-After 强制执行）。本轮方法学无法证伪上限生效，如需验证应对**活跃 run** 建流。
+**SSE**：对**已完成 run** 开 10/30/60 并发连接全部 200。**注意：这组数字对"上限是否生效"信息量为零**——回放连接同样计入上限（`server.ts:1317` 在回放前检查并计数），60 连接全部 200 只说明回放 <1s 内交错关闭、存活峰值从未达到 32，并不代表"支持 60 并发 SSE"。上限路径的真实验证见 §3.1（对活跃 run 建流，2×200 + 2×429）。
 
-**总错误率：0%**（含 429/400 拦截路径均符合预期）。
+**总错误率：0%**（400 拦截路径已验证；**429 写入上限本轮未被触发**——POST 总数 60 < `MAX_ACTIVE_RUNS` 默认 64，测试设计上就不可能触发，属方法学缺陷而非"符合预期"，已由 §3.1 用小阈值实例补测）。
+
+### 3.1 补测：两条 429 上限路径实测（同日第二轮，`.eval/api-limit-probe.mjs`）
+
+**方法**：隔离实例（`PORT=3100`、独立 `SQLITE_PATH`/`ERROR_LOG_PATH`，主库零污染），阈值调小使上限可触达：`MAX_ACTIVE_RUNS=4`、`STREAM_MAX_CONNECTIONS=2`。
+
+| 路径 | 方法 | 实测 | 判定 |
+|---|---|---|---|
+| POST 写入上限（`TOO_MANY_ACTIVE_RUNS`） | 同时发 20 个 Mock run | **4 created（正好=上限）+ 16× 429**（报错 `TOO_MANY_ACTIVE_RUNS：当前有 4 个活动任务，上限 4`），66ms 内完成；全部 run 到终态后再创建恢复 201 | ✅ PASS |
+| SSE 连接上限（`maxConnections`） | 对**活跃 run** 立即开 4 条流 | **2× 200 + 2× 429（`Retry-After: 5`）**；run 终态、连接关闭后 `/api/stream/stats` 回落到 0，重连回放 200（计数释放正确） | ✅ PASS |
+
+结论：两条 429 路径行为与代码一致——写入上限按"当前活跃数 ≥ maxActiveRuns"精确拦截且释放后可恢复；SSE 上限只对**存活中**的连接计数，终态回放快速释放。首轮 §3 的 SSE"60 并发全 200"与此不矛盾：那是交错回放、存活峰值低。
 
 ## 4. 瓶颈分析与修复建议
 
@@ -67,7 +78,7 @@
 
 **③ `/api/health` 聚合成本**：每次调用现查 DB/RAG/调度器（p99 67ms @c=100）。侧栏按需拉取可接受；若前端加轮询（如 ticker 定期刷新），建议服务端 1-2s 结果缓存。**优先级低。**
 
-**④ 写路径容量**：Mock 入队 878 rps、并发 20 未触发 `MAX_ACTIVE_RUNS` 429（Mock 终态太快）；真实模型场景的约束是模型时延与预算，不是 HTTP 层。**无需改动。**
+**④ 写路径容量**：首轮 Mock 入队 878 rps 的样本只有 60 个请求（< 上限 64），该数字仅作入队路径吞吐参考、不构成容量结论；上限拦截行为已由 §3.1 真实验证（20 并发→4+16，释放后恢复）。真实模型场景的约束是模型时延与预算，不是 HTTP 层。**无需改动。**
 
 **⑤ 联调零缺陷**：路径/方法/形状全对齐，无需要修复的链接错误。
 
@@ -80,11 +91,16 @@ npm start
 node .eval/api-integration-probe.mjs
 # 压测（输出 .eval/load-results.json）
 node .eval/api-load-test.mjs
+# 上限路径补测（需先以小阈值起隔离实例；输出 .eval/limit-probe-results.json）
+$env:PORT='3100'; $env:SQLITE_PATH='./data/probe-limit/runtime.db'; $env:ERROR_LOG_PATH='./data/probe-limit/errors.log'; $env:MAX_ACTIVE_RUNS='4'; $env:STREAM_MAX_CONNECTIONS='2'; npm start
+# 另开终端：
+node .eval/api-limit-probe.mjs
 ```
 
 ## 6. 边界声明
 
 - Mock 模式测的是 HTTP/序列化/SQLite 路径；真实模型时延不在此列。
-- 压测脚本与目标同机，客户端与服务端争抢 CPU，RPS 为**下界**估计。
-- 压测产生 60 条 Mock run 与 1 条 probe 数据集合（`probe/p1`），已计入 AGENT_REPORT 的 Mock 计数（能力口径默认排除 Mock）。
-- 未测：TLS（无）、多进程、公网暴露姿态、SSE 对活跃 run 的上限触发路径。
+- 压测脚本与目标同机，客户端与服务端争抢 CPU，RPS 为**下界估计**。
+- 首轮 GET 各档样本量为 n=100/300/600（表格取 c=100 档）、POST 仅 60 个；全部为一轮实测，未做多轮取中位。
+- 首轮压测产生 60 条 Mock run 与 1 条 probe 数据集合（`probe/p1`），已计入 AGENT_REPORT 的 Mock 计数（能力口径默认排除 Mock）；**§3.1 补测用独立端口 + 独立库（`data/probe-limit/`，跑完已删），主库零新增**。
+- 未测：TLS（无）、多进程、公网暴露姿态。首轮遗留的"SSE 对活跃 run 的上限触发路径"已于 §3.1 补测覆盖。
