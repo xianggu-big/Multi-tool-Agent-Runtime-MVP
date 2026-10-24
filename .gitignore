@@ -39,6 +39,9 @@ multi-tool-agent/reports/EDIT_EVAL.partial.md
 # 仓库级 agent skill 配置（个人工作流，非项目代码）
 .agents/
 
+# Trae IDE 工作流目录（skills + 会话产物，机器本地；与 .agents/ 同政策）
+.trae/
+
 # 生成物：单 run 报告 / 数据库
 reports/runs/
 *.db
