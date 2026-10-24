@@ -90,6 +90,10 @@
 
 ## 2026-10-24
 
+### 忽略 .trae/（仓库配置，轻档）
+
+`.gitignore` 新增 `.trae/`（Trae IDE 工作流目录：skills + 会话产物，机器本地，与 `.agents/` 同政策）。本地 `.trae/skills/` 新装 3 个通用工程 skill（systematic-debugging / test-driven-development / verification-before-completion，源自公开 superpowers 仓库），仅本机生效、不随仓库发布。commit `1439a9b`。
+
 ### R-Loop 返工环 Phase 0：先定返工尺子（eval:edit 扩到 12 场景，0 token）
 
 **为什么**：审核评测机制对照（项目 vs 市面前沿）的差距分析结论——部署期兜底（沙箱 + 审批 + 复验回滚）已对齐业界，唯一「低成本高收益」缺口是 **agentic self-repair**：验证失败后自动带结构化证据返工，而不是拦截后靠人重试。按「先定尺子后动刀」的哲学，本轮只落评测层与判定纯函数，运行时（Phase 1）等复审后再动。
