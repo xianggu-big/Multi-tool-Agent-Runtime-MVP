@@ -90,6 +90,10 @@
 
 ## 2026-10-24
 
+### 整树快照：第六~十五轮累积改动入库（仓库操作）
+
+此前第六~十四轮的代码改动（约 113 文件 / +14,303−451）只存在于工作区、无任何版本快照；分轮拆分已不可能（无中间状态），按当前可验证状态一次性入库（commit `4611166`）。快照基线：npm test 80 文件 / 500 子测试全过、typecheck 0 错误、agents:lint 三项通过、eval:edit 12/12。入库前敏感扫描已过：无真实密钥（`sk-` 命中均为测试假值）、无新增个人路径、`mta-probe` token 在跟踪文件中保持 `<redacted-local-token>`。**尚未 push**——远端发布由用户决定。
+
 ### 忽略 .trae/（仓库配置，轻档）
 
 `.gitignore` 新增 `.trae/`（Trae IDE 工作流目录：skills + 会话产物，机器本地，与 `.agents/` 同政策）。本地 `.trae/skills/` 新装 3 个通用工程 skill（systematic-debugging / test-driven-development / verification-before-completion，源自公开 superpowers 仓库），仅本机生效、不随仓库发布。commit `1439a9b`。
