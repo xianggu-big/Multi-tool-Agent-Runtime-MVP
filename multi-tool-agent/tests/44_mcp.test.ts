@@ -423,3 +423,61 @@ test('44h) destructiveHint=true 默认走人工审批：无通道拒绝 / 拒绝
     await client.close();
   }
 });
+
+test('44i) destructive + 无人值守：写入待确认队列；含敏感参数 fail-closed', async () => {
+  const server = new McpServer({ name: 'defer-mcp', version: '0.0.1' });
+  const schema = { type: 'object', properties: { harmless: { type: 'string' }, token: { type: 'string' } } };
+  let executed = 0;
+  server.registerTool({
+    name: 'danger',
+    description: '外部副作用',
+    inputSchema: schema,
+    annotations: { destructiveHint: true },
+    handler: () => {
+      executed += 1;
+      return { ok: true };
+    },
+  });
+  const [clientT, serverT] = createInMemoryTransportPair();
+  serverT.onMessage(async (msg) => {
+    const out = Array.isArray(msg) ? await server.handleBatch(msg) : await server.handle(msg);
+    if (out !== null) await serverT.send(out);
+  });
+  const client = new McpClient(clientT, { timeoutMs: 5000 });
+  try {
+    await client.connect();
+    const registry = new ToolRegistry();
+    await registerMcpTools(registry, client, { permission: 'mcp:call', serverName: 'hub' });
+    const pending: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    let approvals = 0;
+    const ctx = () =>
+      makeCtx({
+        allowedPermissions: ['mcp:call'],
+        untrustedTainted: true,
+        requestApproval: async () => {
+          approvals += 1;
+          throw new Error('无人值守不应弹审批');
+        },
+        autoPolicy: { enabled: true, createPending: (a) => { pending.push(a); return 'pa_' + pending.length; } },
+      });
+
+    const deferred = await registry.execute('mcp_danger', { harmless: 'ok' }, ctx());
+    assert.equal(deferred.result.ok, false);
+    assert.equal(deferred.result.error?.code, 'MCP_DEFERRED');
+    assert.equal(executed, 0, '排队阶段不得调用远端');
+    assert.equal(approvals, 0);
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].kind, 'mcp');
+    assert.equal(pending[0].payload.server, 'hub');
+    assert.equal(pending[0].payload.tool, 'danger');
+    assert.equal(pending[0].payload.tainted, true);
+
+    const sensitive = await registry.execute('mcp_danger', { token: 'sk-abcdefgh12345678' }, ctx());
+    assert.equal(sensitive.result.ok, false);
+    assert.equal(sensitive.result.error?.code, 'MCP_ARGS_SENSITIVE');
+    assert.equal(pending.length, 1, '敏感参数不得进入待确认队列');
+    assert.equal(executed, 0);
+  } finally {
+    await client.close();
+  }
+});

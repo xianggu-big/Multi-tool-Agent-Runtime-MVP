@@ -85,30 +85,39 @@
 ## 七、相关文件
 
 - `src/knowledge/repository.ts` / `history.ts` / `context.ts` / `index.ts`（门面）
-- `src/knowledge/vectorRecall.ts`（语义向量召回层，见下「语义召回」）
+- `src/knowledge/vectorRecall.ts`（嵌入原语 + 旧 sqlite-vec 兼容工具；生产检索已统一到 RAG）
 - `src/store/SqliteStore.ts`（`listOrphanRuns` / `finalizeInterruptedRun` / `database` getter）
 - `src/runtime/index.ts`（装配 + 启动回收）
 - `src/server.ts`（API 路由）
 - `tests/26_knowledge.test.ts`（8 个用例：三模块 + 互通 + 回收 + 幂等 + API）
-- `tests/28_vector_recall.test.ts`（14 个用例：HashEmbedder + 语义检索 + 降级 + 混合检索 + KnowledgeHub 集成）
+- `tests/28_vector_recall.test.ts`（14 个用例：HashEmbedder + 旧向量层原语 + 统一检索集成）
+- `tests/79_rag_unified.test.ts`（8 个用例：单一写入、三模式同管线、文档级去重、元数据过滤、级联删除、统一统计、HTTP 路由、`--replace` 无 `data_vec` 回归）
 
-## 八、语义向量召回层（叠加在 FTS5 之上）
+## 八、统一检索层（切块级 RAG，2026-10-24 起唯一路径）
 
-> 2026-10-13 新增。让知识库「按意思」而非「按字面」召回。详见 `docs/SUBAGENT_LIFECYCLE_AND_KNOWLEDGE.md`。
+> 早期曾并行维护两套向量：`data_vec`（sqlite-vec + HashEmbedder 256 维）与 `rag_chunks`（切块级 RAG）。
+> 2026-10-24 完成统一：**`data_vec` 停写，RAG 是关键词/语义/混合三种模式的唯一实现**。
 
-**为什么加**：FTS5 只命中关键词；「按语义/意图」召回不了（存了「硬编码密钥」，问「不安全常量」命中不了）。向量层补齐这一块。
+**为什么统一**：双轨会双写 embedding、双份存储、同一查询两个答案，换模型还要迁移两处；切块级 RAG 在召回质量（BM25 + 向量 + RRF + rerank）、持久化（重启零 embedding）和可评测性上都更强。
 
-**实现**（`src/knowledge/vectorRecall.ts`，复用同一 SQLite 连接）：
-- **sqlite-vec** v0.1.9 扩展（已 `npm i sqlite-vec`，本机探测可加载）：`data_vec` vec0 虚表 + **辅助列 `data_id text`** 关联 data_items.id（v0.1.9 不允许显式传 rowid，实测改用辅助列方案）；kNN 按距离排序，转相似度 ∈ [0,1]；
-- **可降级**：sqlite-vec 不可用 → 全表扫描 + 内存余弦重排（与 FTS5→LIKE 同约定，无原生扩展也能用）；
-- **嵌入器**：默认 `HashEmbedder`（词 + 字符 3-gram 哈希向量，确定性、零依赖、中文友好、L2 归一化）；接口已留，可注入 `@xenova/transformers` 真嵌入器升级为真语义召回；
-- `KnowledgeHub` 集成：`putData` 同步 upsert 向量、`deleteData` 同步 remove、`searchSemantic(query, {limit, collection})`、`searchHybrid`（关键词∪语义融合去重，`matchedBy` 标注命中来源）、`stats` 含 vector 维度。
+**唯一管线**：
+```
+data_items → chunk(512/64) → embedding → BM25 + Flat/HNSW/IVF → RRF/加权 → rerank → 文档级去重
+```
 
-**检索三通道**：
-| 方法 | 通道 | 适用 |
-|---|---|---|
-| `repository.search` / `queryData` | FTS5 关键词 | 精确词命中、已知术语 |
-| `knowledge.searchSemantic` | 向量 kNN | 按意思、同义不同字、模糊意图 |
-| `knowledge.searchHybrid` | 关键词 ∪ 语义 | 通用（精确命中保 1.0 分，语义补召回，取 max 去重） |
+**统一入口**：
+| 入口 | 说明 |
+|---|---|
+| `knowledge.searchKnowledge(q, {mode:'keyword'|'semantic'|'hybrid', limit, collection})` | 返回文档级命中（`score / normalizedScore / matchedBy / chunkId / chunkHits`） |
+| `knowledge.searchSemantic` / `searchHybrid` | 兼容包装，分别固定 `vector` / `hybrid_rerank` |
+| `GET /api/knowledge/search?mode=...` | 三种 mode 同管线；keyword 仍返回 `items`，另两种返回 `hits` |
+| `GET/POST /api/rag/*` | 索引观测、重建（flat/hnsw/ivf、chunk 参数）、切块级检索 |
+| `knowledge_search` 工具 / MCP `kb_search` | 与 HTTP 共用 `searchRag` |
 
-**升级路径**：注入真嵌入器（@xenova/transformers）→ 知识 compaction/decay（旧结论随源文件改动失效，解 R6）→ 自动入库管道（Agent 发现 → data_items）→ 知识图谱（实体关系，GraphRAG 思路）。
+**存储与增量**：`rag_chunks`（chunk 正文 + 向量 BLOB + `doc_hash`）+ `rag_index_meta`（模型/维度/切块指纹）；写入只标脏，下次检索或后台任务按 `doc_hash` 增量补齐；删除文档级联删块。
+
+**统计口径**：`knowledge.stats().vector` 现在返回 `{ engine:'rag', built, embedder, dim, docs, chunks, count }`，不再报告 `data_vec` 的 256 维 hash 计数。
+
+**旧表迁移**：代码不再创建/写入 `data_vec`；历史库里的旧表不影响检索，可保留或手动清理（`npm run rag:cleanup-legacy`，需 `sqlite-vec` 可加载）。
+
+**边界**：默认 `hash-ngram` 只是离线兜底、不是真语义模型（真实模型需 `MTA_EMBEDDING_MODEL`）；默认 Flat 精确检索，HNSW/IVF 为教学实现；中文 BM25 用字 bigram 近似，不等同于专业分词器。

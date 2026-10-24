@@ -7,8 +7,9 @@
  * - research：公开资料研究（联网检索、证据提取）
  * - misc：杂项与低优先级琐事（只读、单步、本地、失败无严重后果）
  * - orchestrator：多 Agent 编排（主 Agent 拆分 → 并行派发子 Agent → 汇总核验）
+ * - codex：本机 Codex CLI 直连（外部 Agent 适配器；不走内置 LLM Loop）
  */
-export type RunType = 'codebase' | 'research' | 'misc' | 'orchestrator';
+export type RunType = 'codebase' | 'research' | 'misc' | 'orchestrator' | 'codex';
 
 export type RunStatus =
   | 'queued'
@@ -252,7 +253,15 @@ export type TraceEventType =
   | 'recovery_detected'
   | 'recovery_auto_restored'
   | 'recovery_rolled_back'
-  | 'recovery_accepted';
+  | 'recovery_accepted'
+  // Codex 直连（外部 Agent 适配器）：会话、回答、用量
+  | 'codex_thread'
+  | 'codex_message'
+  | 'codex_completed'
+  // 无人值守安全策略：高危操作被暂缓，进入待确认队列
+  | 'change_deferred'
+  | 'pending_action_created'
+  | 'pending_action_decided';
 
 // ---------------------------------------------------------------------------
 // 人工审批（M1：写能力门禁）
@@ -502,6 +511,34 @@ export interface RunInput extends RunLimits {
    * legacy 复刻 R23 之前的固定切法/200 字截断/3000 字上限，不保留旧摘要与任务目标。
    */
   compactionStrategy?: 'rolling' | 'legacy';
+  /**
+   * Codex 直连任务配置（仅 runType='codex' 生效）。
+   * 注意：不含任何 API Key——Codex 用本机自己的登录态/配置。
+   */
+  codex?: {
+    /** 是否允许写：true = 在稳定副本上跑 workspace-write，并把改动导入审批/落盘管线 */
+    allowWrite?: boolean;
+    /** 续接上一次 Codex 会话（thread id） */
+    resumeThreadId?: string;
+    /** 稳定工作副本 id（写模式续问沿用；缺省自动生成） */
+    workspaceId?: string;
+    /** 覆盖本机 Codex 默认模型（透传 -m） */
+    model?: string;
+    /** 安全边界说明（注入 prompt；只作引导，强制边界由代码判定） */
+    safetyPrompt?: string;
+    /** 结构化危险模式（用于判定哪些操作要暂缓；缺省用内置） */
+    dangerPatterns?: string[];
+    /** 只读模式是否也走副本（默认 false：直接读真实仓库，Codex 自带 read-only 沙箱） */
+    isolateRead?: boolean;
+  };
+  /**
+   * 无人值守自动放行（仅定时任务）：普通 create/edit 自动落盘；
+   * 删除/宿主命令等危险操作暂缓进 pending_actions，跑完由用户事后决定。
+   * **只有请求同时带 scheduleId 时才被受理**（防止普通 HTTP 调用绕过审批）。
+   */
+  autoApprove?: boolean;
+  /** 该 run 由哪条定时计划触发（用于关联 pending_actions / 统计） */
+  scheduleId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +712,41 @@ export interface RunResult {
   subtasks?: SubtaskOutcome[];
   /** 等待用户回答（模型调用 ask_user 时存在；status=awaiting_user） */
   awaitingUser?: AwaitingUser;
+  /** Codex 直连任务的结构化结果（仅 runType='codex'） */
+  codex?: CodexRunSummary;
+}
+
+/** Codex 直连任务的结构化结果（落 runs.resultJson，供续问/复盘/UI 使用） */
+export interface CodexRunSummary {
+  threadId?: string;
+  /** Codex 实际工作目录（续问时沿用；写模式 = 稳定副本） */
+  cwd?: string;
+  mode: 'read_only' | 'write';
+  workspaceId?: string;
+  model?: string;
+  answer: string;
+  /** 本次所有 agent_message（含过程消息） */
+  messages: string[];
+  usage?: {
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    reasoningOutputTokens: number;
+  };
+  commands?: number;
+  /** 写模式的变更导入/落盘结果 */
+  changes?: {
+    imported: number;
+    applied: string[];
+    deferred: string[];
+    refused: string[];
+    skipped: Array<{ relPath: string; reason: string }>;
+  };
+  /** 进入待确认队列的高危操作 */
+  deferred?: Array<{ id: string; kind: string; relPath?: string; command?: string }>;
+  /** 是否成功从 rollout 旁路读到思考文本（false = 已降级） */
+  reasoningCaptured?: boolean;
+  exitCode?: number | null;
 }
 
 export interface SourceRef {
@@ -720,4 +792,6 @@ export interface RunRecord {
   isMock: number; // 0/1
   /** 结构化结果（JSON 字符串，目前用于 misc 任务的 MiscReport） */
   resultJson?: string;
+  /** 由哪条定时计划触发（无 = 手动/API 触发） */
+  scheduleId?: string;
 }

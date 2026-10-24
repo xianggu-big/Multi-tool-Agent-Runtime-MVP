@@ -35,6 +35,7 @@
 | `code-audit` | 代码审计子 Agent（只读） | 4 | `codebase:read` `agent:report` | 12/12/24/120000 | `session` | codebase → orchestrator → human |
 | `doc-research` | 资料调研子 Agent | 5 | `research:web` `research:read` `knowledge:read` `agent:report` | 8/10/16/80000 | `ephemeral` | research → human |
 | `code-edit` | 可写代码子 Agent（沙箱 + 人工审批） | 11 | `codebase:read` `codebase:test` `codebase:write` `agent:report` | 12/12/24/120000 | `session` | codebase → orchestrator → human |
+| `codex-code` | 本机 Codex 代码子 Agent（外部 CLI） | 2 | `codex:exec` `agent:report` | 6/6/8/60000 | `ephemeral` | codebase → orchestrator → human |
 
 ## 4. 协作纪律（主 Agent 必读）
 1. **先判依赖再拆**：子任务必须相互独立；有依赖的活串行分多次派发。

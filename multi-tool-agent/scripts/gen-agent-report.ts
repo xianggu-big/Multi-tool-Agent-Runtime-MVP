@@ -128,18 +128,22 @@ function statsOf(rows: RunRow[]) {
   };
 }
 
-const real = runs.filter((r) => !r.isMock);
-const mock = runs.filter((r) => !!r.isMock);
-const all = statsOf(runs);
+// Codex 是外部 Agent 适配器：与内置 Agent 分开统计（否则会拉低/混淆「内置 Agent 能力」口径）
+const codexRuns = runs.filter((r) => r.runType === 'codex');
+const coreRuns = runs.filter((r) => r.runType !== 'codex');
+const real = coreRuns.filter((r) => !r.isMock);
+const mock = coreRuns.filter((r) => !!r.isMock);
+const all = statsOf(coreRuns);
 const realStats = statsOf(real);
-const byType = ['codebase', 'research', 'misc', 'orchestrator'].map((t) => ({
+const codexStats = statsOf(codexRuns.filter((r) => !r.isMock));
+const byType = ['codebase', 'research', 'misc', 'orchestrator', 'codex'].map((t) => ({
   type: t,
   ...statsOf(runs.filter((r) => r.runType === t)),
 }));
 
 // 失败原因分类（真实任务优先）
 const failReasons = new Map<string, number>();
-for (const r of runs) {
+for (const r of coreRuns) {
   if (isOk(r) || isAwaiting(r)) continue;
   const key = r.errorCode ?? r.triggeredLimit ?? r.status;
   failReasons.set(key, (failReasons.get(key) ?? 0) + 1);
@@ -309,8 +313,9 @@ const L: string[] = [
   tbl(
     ['口径', '任务数', '成功', '等待用户', '成功率', '平均步数', '平均耗时', 'P95 耗时', 'tokens', '缓存命中', '成本'],
     [
-      ['全部', all.n, all.ok, all.awaiting, pct(all.successRate), all.avgSteps.toFixed(1), ms(all.avgMs), ms(all.p95Ms), all.tokens, all.tokens ? pct(all.cachedTokens / all.tokens) : '—', usd(all.cost)],
-      ['真实模型', realStats.n, realStats.ok, realStats.awaiting, pct(realStats.successRate), realStats.avgSteps.toFixed(1), ms(realStats.avgMs), ms(realStats.p95Ms), realStats.tokens, realStats.tokens ? pct(realStats.cachedTokens / realStats.tokens) : '—', usd(realStats.cost)],
+      ['内置 Agent（全部）', all.n, all.ok, all.awaiting, pct(all.successRate), all.avgSteps.toFixed(1), ms(all.avgMs), ms(all.p95Ms), all.tokens, all.tokens ? pct(all.cachedTokens / all.tokens) : '—', usd(all.cost)],
+      ['内置 Agent（真实模型）', realStats.n, realStats.ok, realStats.awaiting, pct(realStats.successRate), realStats.avgSteps.toFixed(1), ms(realStats.avgMs), ms(realStats.p95Ms), realStats.tokens, realStats.tokens ? pct(realStats.cachedTokens / realStats.tokens) : '—', usd(realStats.cost)],
+      ['Codex 直连（真实）', codexStats.n, codexStats.ok, codexStats.awaiting, codexStats.n ? pct(codexStats.successRate) : '—', codexStats.n ? codexStats.avgSteps.toFixed(1) : '—', codexStats.n ? ms(codexStats.avgMs) : '—', codexStats.n ? ms(codexStats.p95Ms) : '—', codexStats.tokens, '—', '费用未计入'],
       ['Mock（仅演示）', mock.length, mock.filter(isOk).length, mock.filter(isAwaiting).length, pct(mock.length ? mock.filter(isOk).length / Math.max(1, mock.length - mock.filter(isAwaiting).length) : 0), '—', ms(mock.length ? statsOf(mock).avgMs : 0), '—', mock.reduce((a, r) => a + (usageOf(r).totalTokens ?? 0), 0), '—', '—'],
     ],
   ),
@@ -448,5 +453,6 @@ db?.close();
 console.log(`[report:agent] 已生成 reports/AGENT_REPORT.md`);
 console.log(
   `  任务 ${all.n} 个（真实 ${realStats.n} / mock ${mock.length}）· 成功率 ${pct(all.successRate)}（真实 ${pct(realStats.successRate)}）· 平均耗时 ${ms(all.avgMs)} · 成本 ${usd(all.cost)}`,
+  `  Codex 直连 ${codexStats.n} 个 · 成功率 ${codexStats.n ? pct(codexStats.successRate) : '—'} · 平均耗时 ${codexStats.n ? ms(codexStats.avgMs) : '—'} · tokens ${codexStats.tokens}（费用未计入）`,
 );
 console.log(`  快照：reports/history/agent-${today}.json${prev ? `（环比对象：${prev.date}）` : '（首次）'}`);

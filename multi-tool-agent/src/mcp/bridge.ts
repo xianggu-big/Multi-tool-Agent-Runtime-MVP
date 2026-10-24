@@ -7,9 +7,12 @@ import { z } from 'zod';
 import type { RiskLevel } from '../types.js';
 import type { ToolRegistry } from '../tools/Registry.js';
 import { errResult, okResult, type Tool } from '../tools/types.js';
+import { hasSensitiveData, redactSecretsDeep } from '../security/redact.js';
 import { mcpToolJson, mcpToolText, type McpClient } from './client.js';
 
 export interface McpBridgeOptions {
+  /** 该 client 对应的 MCP server 名（待确认执行时需要找回 server）。 */
+  serverName?: string;
   /** 本地工具名前缀，避免与内置工具冲突；默认 `mcp_` */
   prefix?: string;
   /** 需要的权限名；Agent spec 必须显式授予 */
@@ -56,6 +59,48 @@ export async function registerMcpTools(
       execute: async (input, ctx) => {
         const started = Date.now();
         if (riskLevel === 'high' && requireApproval) {
+          // 无人值守定时任务：不弹审批（会挂到 300s 超时），改为写入待确认队列。
+          if (ctx.autoPolicy?.enabled) {
+            let args: Record<string, unknown>;
+            try {
+              const text = JSON.stringify(input ?? {});
+              if (text.length > 16_000) {
+                return errResult(
+                  'MCP_ARGS_TOO_LARGE',
+                  `MCP 工具 ${def.name} 的参数超过 16000 字符，已 fail-closed，未写入待确认队列。`,
+                  Date.now() - started,
+                );
+              }
+              args = asObject(input);
+            } catch {
+              return errResult('MCP_ARGS_INVALID', `MCP 工具 ${def.name} 的参数无法序列化，已拒绝。`, Date.now() - started);
+            }
+            // 待确认队列会落库并长期保留；凭据类参数不能这样存。
+            // 这类调用只能走交互式人工审批，不能“先排队、事后执行”。
+            if (hasSensitiveData(args)) {
+              return errResult(
+                'MCP_ARGS_SENSITIVE',
+                `MCP 工具 ${def.name} 的参数包含 token/key/secret/password 等敏感字段，已 fail-closed，不写入待确认队列；请在交互式任务中人工批准。`,
+                Date.now() - started,
+              );
+            }
+            const actionId = ctx.autoPolicy.createPending({
+              kind: 'mcp',
+              payload: {
+                server: opts.serverName ?? 'unknown',
+                tool: def.name,
+                localName,
+                args,
+                timeoutMs: opts.timeoutMs ?? 30_000,
+                tainted: ctx.untrustedTainted === true,
+              },
+            });
+            return errResult(
+              'MCP_DEFERRED',
+              `MCP 工具 ${def.name} 声明 destructiveHint=true，已暂缓为待确认操作（${actionId}）；用户确认后才会执行。`,
+              Date.now() - started,
+            );
+          }
           if (!ctx.requestApproval) {
             return errResult(
               'MCP_APPROVAL_REQUIRED',
@@ -119,7 +164,8 @@ function asObject(x: unknown): Record<string, unknown> {
 function clipArgs(input: unknown, max = 400): string {
   let text: string;
   try {
-    text = JSON.stringify(input ?? {});
+    // 审批卡可能被截图/持久化，只展示脱敏后的摘要。
+    text = JSON.stringify(redactSecretsDeep(input ?? {}).value);
   } catch {
     text = String(input);
   }

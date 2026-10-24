@@ -14,6 +14,11 @@ import type {
   TraceEvent,
 } from '../types.js';
 import type { RunDigest } from '../runtime/runDigest.js';
+import type {
+  PendingActionRecord,
+  PendingActionStatus,
+  ScheduleRecord,
+} from '../scheduler/types.js';
 
 export class SqliteStore {
   private db: Database.Database;
@@ -29,6 +34,76 @@ export class SqliteStore {
   /** 暴露底层连接，供知识系统等共享同一 DB（单连接 → 跨表事务天然一致） */
   get database(): Database.Database {
     return this.db;
+  }
+
+  /** 健康探针：只做一次最小查询，不触碰业务数据。 */
+  ping(): { ok: boolean; error?: string } {
+    try {
+      this.db.prepare('SELECT 1').get();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  }
+
+  /**
+   * 删除早于 cutoff 的终态 run 及其事件/检查点/复盘摘要（数据保留策略）。
+   *
+   * 保守规则（宁可不删）：
+   *   - 只删 completed / failed / cancelled / limit_reached；
+   *   - `awaiting_user` 与活动状态一律保留；
+   *   - 仍有 pending 待确认操作的 run 保留（用户还要做决定）；
+   *   - 被定时任务 lastRunId 引用的 run 保留（否则「上次运行」会凭空消失）。
+   */
+  pruneRunsOlderThan(
+    cutoffIso: string,
+    opts: { dryRun?: boolean; limit?: number } = {},
+  ): { runs: number; events: number; checkpoints: number; digests: number; pendingActions: number } {
+    const limit = Math.max(1, Math.min(50_000, Math.floor(opts.limit ?? 5000)));
+    const rows = this.db
+      .prepare(
+        `SELECT r.runId AS runId FROM runs r
+         WHERE r.createdAt < @cutoff
+           AND r.status IN ('completed','failed','cancelled','limit_reached')
+           AND NOT EXISTS (SELECT 1 FROM pending_actions p WHERE p.runId = r.runId AND p.status = 'pending')
+           AND NOT EXISTS (SELECT 1 FROM schedules s WHERE s.lastRunId = r.runId)
+         ORDER BY r.createdAt ASC
+         LIMIT @limit`,
+      )
+      .all({ cutoff: cutoffIso, limit }) as Array<{ runId: string }>;
+    const ids = rows.map((r) => r.runId);
+    const totals = { runs: ids.length, events: 0, checkpoints: 0, digests: 0, pendingActions: 0 };
+    if (!ids.length) return totals;
+
+    const countStmt = (sql: string) => this.db.prepare(sql);
+    const countEvents = countStmt('SELECT COUNT(*) AS n FROM events WHERE runId = ?');
+    const countCheckpoints = countStmt('SELECT COUNT(*) AS n FROM checkpoints WHERE runId = ?');
+    const countDigests = countStmt('SELECT COUNT(*) AS n FROM run_digests WHERE runId = ?');
+    const countPending = countStmt('SELECT COUNT(*) AS n FROM pending_actions WHERE runId = ?');
+    for (const id of ids) {
+      totals.events += Number((countEvents.get(id) as any)?.n ?? 0);
+      totals.checkpoints += Number((countCheckpoints.get(id) as any)?.n ?? 0);
+      totals.digests += Number((countDigests.get(id) as any)?.n ?? 0);
+      totals.pendingActions += Number((countPending.get(id) as any)?.n ?? 0);
+    }
+    if (opts.dryRun) return totals;
+
+    const delRun = this.db.transaction((runIds: string[]) => {
+      const delEvents = this.db.prepare('DELETE FROM events WHERE runId = ?');
+      const delCheckpoints = this.db.prepare('DELETE FROM checkpoints WHERE runId = ?');
+      const delDigests = this.db.prepare('DELETE FROM run_digests WHERE runId = ?');
+      const delPending = this.db.prepare('DELETE FROM pending_actions WHERE runId = ?');
+      const delRuns = this.db.prepare('DELETE FROM runs WHERE runId = ?');
+      for (const id of runIds) {
+        delEvents.run(id);
+        delCheckpoints.run(id);
+        delDigests.run(id);
+        delPending.run(id);
+        delRuns.run(id);
+      }
+    });
+    delRun(ids);
+    return totals;
   }
 
   /** 关闭数据库连接（测试与服务优雅退出时使用） */
@@ -70,6 +145,7 @@ export class SqliteStore {
         dataJson TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_events_run ON events(runId, seq);
+      CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(createdAt);
       CREATE TABLE IF NOT EXISTS checkpoints (
         runId TEXT PRIMARY KEY,
         step INTEGER NOT NULL,
@@ -96,6 +172,44 @@ export class SqliteStore {
       );
       CREATE INDEX IF NOT EXISTS idx_digests_finished ON run_digests(finishedAt DESC);
       CREATE INDEX IF NOT EXISTS idx_digests_status ON run_digests(status);
+      CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        repoPath TEXT,
+        frequency TEXT NOT NULL,
+        runAt TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        allowWrite INTEGER NOT NULL DEFAULT 0,
+        autoApprove INTEGER NOT NULL DEFAULT 0,
+        safetyPrompt TEXT,
+        dangerPatternsJson TEXT NOT NULL DEFAULT '[]',
+        allowRunTests INTEGER NOT NULL DEFAULT 0,
+        skipIfRunning INTEGER NOT NULL DEFAULT 1,
+        optionsJson TEXT NOT NULL DEFAULT '{}',
+        nextRunAt TEXT,
+        lastRunAt TEXT,
+        lastRunId TEXT,
+        lastStatus TEXT,
+        lastError TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(enabled, nextRunAt);
+      CREATE TABLE IF NOT EXISTS pending_actions (
+        id TEXT PRIMARY KEY,
+        runId TEXT NOT NULL,
+        scheduleId TEXT,
+        kind TEXT NOT NULL,
+        payloadJson TEXT NOT NULL,
+        status TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        decidedAt TEXT,
+        resultJson TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_actions(status, createdAt);
+      CREATE INDEX IF NOT EXISTS idx_pending_run ON pending_actions(runId);
     `);
   }
 
@@ -110,13 +224,17 @@ export class SqliteStore {
     if (!cpCols.includes('pausedMs')) {
       this.db.exec(`ALTER TABLE checkpoints ADD COLUMN pausedMs INTEGER NOT NULL DEFAULT 0`);
     }
+    // 定时任务：run 与 schedule 的关联列（历史库补齐）
+    if (!cols.includes('scheduleId')) {
+      this.db.exec(`ALTER TABLE runs ADD COLUMN scheduleId TEXT`);
+    }
   }
 
   createRun(rec: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (runId, runType, status, goal, createdAt, updatedAt, steps, modelCalls, toolCalls, totalDurationMs, usageJson, isMock)
-         VALUES (@runId, @runType, @status, @goal, @createdAt, @updatedAt, @steps, @modelCalls, @toolCalls, @totalDurationMs, @usageJson, @isMock)`,
+        `INSERT INTO runs (runId, runType, status, goal, createdAt, updatedAt, steps, modelCalls, toolCalls, totalDurationMs, usageJson, isMock, scheduleId)
+         VALUES (@runId, @runType, @status, @goal, @createdAt, @updatedAt, @steps, @modelCalls, @toolCalls, @totalDurationMs, @usageJson, @isMock, @scheduleId)`,
       )
       .run({
         runId: rec.runId,
@@ -131,6 +249,7 @@ export class SqliteStore {
         totalDurationMs: rec.totalDurationMs,
         usageJson: rec.usageJson,
         isMock: rec.isMock,
+        scheduleId: rec.scheduleId ?? null,
       });
   }
 
@@ -376,6 +495,174 @@ export class SqliteStore {
     return rows.map((r) => this.rowToRecord(r));
   }
 
+  // ---------------------------------------------------------------- 定时任务
+  saveSchedule(rec: ScheduleRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO schedules (
+           id, name, agent, goal, repoPath, frequency, runAt, enabled, allowWrite, autoApprove,
+           safetyPrompt, dangerPatternsJson, allowRunTests, skipIfRunning, optionsJson,
+           nextRunAt, lastRunAt, lastRunId, lastStatus, lastError, createdAt, updatedAt
+         ) VALUES (
+           @id, @name, @agent, @goal, @repoPath, @frequency, @runAt, @enabled, @allowWrite, @autoApprove,
+           @safetyPrompt, @dangerPatternsJson, @allowRunTests, @skipIfRunning, @optionsJson,
+           @nextRunAt, @lastRunAt, @lastRunId, @lastStatus, @lastError, @createdAt, @updatedAt
+         )
+         ON CONFLICT(id) DO UPDATE SET
+           name=excluded.name, agent=excluded.agent, goal=excluded.goal, repoPath=excluded.repoPath,
+           frequency=excluded.frequency, runAt=excluded.runAt, enabled=excluded.enabled,
+           allowWrite=excluded.allowWrite, autoApprove=excluded.autoApprove,
+           safetyPrompt=excluded.safetyPrompt, dangerPatternsJson=excluded.dangerPatternsJson,
+           allowRunTests=excluded.allowRunTests, skipIfRunning=excluded.skipIfRunning,
+           optionsJson=excluded.optionsJson, nextRunAt=excluded.nextRunAt, lastRunAt=excluded.lastRunAt,
+           lastRunId=excluded.lastRunId, lastStatus=excluded.lastStatus, lastError=excluded.lastError,
+           updatedAt=excluded.updatedAt`,
+      )
+      .run({
+        id: rec.id,
+        name: rec.name,
+        agent: rec.agent,
+        goal: rec.goal,
+        repoPath: rec.repoPath ?? null,
+        frequency: rec.frequency,
+        runAt: rec.runAt ?? null,
+        enabled: rec.enabled ? 1 : 0,
+        allowWrite: rec.allowWrite ? 1 : 0,
+        autoApprove: rec.autoApprove ? 1 : 0,
+        safetyPrompt: rec.safetyPrompt ?? null,
+        dangerPatternsJson: JSON.stringify(rec.dangerPatterns ?? []),
+        allowRunTests: rec.allowRunTests ? 1 : 0,
+        skipIfRunning: rec.skipIfRunning ? 1 : 0,
+        optionsJson: JSON.stringify(rec.options ?? {}),
+        nextRunAt: rec.nextRunAt ?? null,
+        lastRunAt: rec.lastRunAt ?? null,
+        lastRunId: rec.lastRunId ?? null,
+        lastStatus: rec.lastStatus ?? null,
+        lastError: rec.lastError ?? null,
+        createdAt: rec.createdAt,
+        updatedAt: rec.updatedAt,
+      });
+  }
+
+  getSchedule(id: string): ScheduleRecord | null {
+    const row = this.db.prepare(`SELECT * FROM schedules WHERE id = ?`).get(id) as any;
+    return row ? this.rowToSchedule(row) : null;
+  }
+
+  listSchedules(): ScheduleRecord[] {
+    const rows = this.db.prepare(`SELECT * FROM schedules ORDER BY createdAt ASC`).all() as any[];
+    return rows.map((r) => this.rowToSchedule(r));
+  }
+
+  deleteSchedule(id: string): void {
+    this.db.prepare(`DELETE FROM schedules WHERE id = ?`).run(id);
+  }
+
+  listRunsBySchedule(scheduleId: string, limit = 20): RunRecord[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM runs WHERE scheduleId = ? ORDER BY createdAt DESC LIMIT ?`)
+      .all(scheduleId, limit) as any[];
+    return rows.map((r) => this.rowToRecord(r));
+  }
+
+  private rowToSchedule(row: any): ScheduleRecord {
+    return {
+      id: row.id,
+      name: row.name,
+      agent: row.agent,
+      goal: row.goal,
+      repoPath: row.repoPath ?? undefined,
+      frequency: row.frequency === 'daily' ? 'daily' : 'once',
+      runAt: row.runAt ?? undefined,
+      enabled: row.enabled === 1,
+      allowWrite: row.allowWrite === 1,
+      autoApprove: row.autoApprove === 1,
+      safetyPrompt: row.safetyPrompt ?? undefined,
+      dangerPatterns: safeJsonArray(row.dangerPatternsJson),
+      allowRunTests: row.allowRunTests === 1,
+      skipIfRunning: row.skipIfRunning === 1,
+      options: safeJsonObject(row.optionsJson),
+      nextRunAt: row.nextRunAt ?? undefined,
+      lastRunAt: row.lastRunAt ?? undefined,
+      lastRunId: row.lastRunId ?? undefined,
+      lastStatus: row.lastStatus ?? undefined,
+      lastError: row.lastError ?? undefined,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  // ---------------------------------------------------------------- 待确认高危操作
+  createPendingAction(rec: PendingActionRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO pending_actions (id, runId, scheduleId, kind, payloadJson, status, createdAt, decidedAt, resultJson)
+         VALUES (@id, @runId, @scheduleId, @kind, @payloadJson, @status, @createdAt, @decidedAt, @resultJson)`,
+      )
+      .run({
+        id: rec.id,
+        runId: rec.runId,
+        scheduleId: rec.scheduleId ?? null,
+        kind: rec.kind,
+        payloadJson: JSON.stringify(rec.payload ?? {}),
+        status: rec.status,
+        createdAt: rec.createdAt,
+        decidedAt: rec.decidedAt ?? null,
+        resultJson: rec.result ? JSON.stringify(rec.result) : null,
+      });
+  }
+
+  getPendingAction(id: string): PendingActionRecord | null {
+    const row = this.db.prepare(`SELECT * FROM pending_actions WHERE id = ?`).get(id) as any;
+    return row ? this.rowToPendingAction(row) : null;
+  }
+
+  listPendingActions(
+    opts: { status?: PendingActionStatus; runId?: string; scheduleId?: string; limit?: number } = {},
+  ): PendingActionRecord[] {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (opts.status) {
+      where.push('status = ?');
+      params.push(opts.status);
+    }
+    if (opts.runId) {
+      where.push('runId = ?');
+      params.push(opts.runId);
+    }
+    if (opts.scheduleId) {
+      where.push('scheduleId = ?');
+      params.push(opts.scheduleId);
+    }
+    const limit = Math.max(1, Math.min(500, opts.limit ?? 100));
+    const sql = `SELECT * FROM pending_actions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY createdAt DESC LIMIT ?`;
+    const rows = this.db.prepare(sql).all(...params, limit) as any[];
+    return rows.map((r) => this.rowToPendingAction(r));
+  }
+
+  updatePendingAction(
+    id: string,
+    patch: { status: PendingActionStatus; decidedAt?: string; result?: Record<string, unknown> },
+  ): void {
+    this.db
+      .prepare(`UPDATE pending_actions SET status = ?, decidedAt = ?, resultJson = ? WHERE id = ?`)
+      .run(patch.status, patch.decidedAt ?? new Date().toISOString(), patch.result ? JSON.stringify(patch.result) : null, id);
+  }
+
+  private rowToPendingAction(row: any): PendingActionRecord {
+    return {
+      id: row.id,
+      runId: row.runId,
+      scheduleId: row.scheduleId ?? undefined,
+      kind: row.kind,
+      payload: safeJsonObject(row.payloadJson),
+      status: row.status,
+      createdAt: row.createdAt,
+      decidedAt: row.decidedAt ?? undefined,
+      result: row.resultJson ? safeJsonObject(row.resultJson) : undefined,
+    };
+  }
+
   private rowToRecord(row: any): RunRecord {
     return {
       runId: row.runId,
@@ -395,7 +682,28 @@ export class SqliteStore {
       triggeredLimit: row.triggeredLimit ?? undefined,
       isMock: row.isMock,
       resultJson: row.resultJson ?? undefined,
+      scheduleId: row.scheduleId ?? undefined,
     };
+  }
+}
+
+function safeJsonObject(raw: unknown): Record<string, any> {
+  if (typeof raw !== 'string' || !raw.trim()) return {};
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, any>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function safeJsonArray(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
   }
 }
 
@@ -422,6 +730,7 @@ export function recordToResult(rec: RunRecord): RunResult {
         ...(payload.orchestration ? { orchestration: payload.orchestration } : {}),
         ...(payload.subtasks ? { subtasks: payload.subtasks } : {}),
         ...(payload.awaitingUser ? { awaitingUser: payload.awaitingUser } : {}),
+        ...(payload.codex ? { codex: payload.codex } : {}),
       };
     })(),
   };

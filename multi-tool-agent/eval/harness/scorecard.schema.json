@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/mta/eval/harness/scorecard.schema.json",
+  "title": "Agent Harness Scorecard",
+  "description": "Aggregate result of a frozen harness evaluation. There is deliberately no single weighted total: P0 gates must be read first, then metric slices and limitations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "standardVersion",
+    "date",
+    "status",
+    "corpus",
+    "model",
+    "harness",
+    "run",
+    "metrics",
+    "gates",
+    "readiness",
+    "artifacts",
+    "limitations"
+  ],
+  "properties": {
+    "standardVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Version of docs/HARNESS_EVALUATION_STANDARD.md used for this scorecard."
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "final", "invalidated"]
+    },
+    "corpus": { "$ref": "#/$defs/corpus" },
+    "model": { "$ref": "#/$defs/model" },
+    "harness": { "$ref": "#/$defs/harness" },
+    "run": { "$ref": "#/$defs/run" },
+    "metrics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/metric" }
+    },
+    "gates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/gate" }
+    },
+    "readiness": { "$ref": "#/$defs/readiness" },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "failures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/failure" }
+    },
+    "baseline": { "$ref": "#/$defs/baseline" },
+    "environment": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "conclusion": { "$ref": "#/$defs/conclusion" },
+    "notes": { "type": "string" },
+    "extensions": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "sha256", "tasks", "distribution"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "tasks": { "type": "integer", "minimum": 1 },
+        "distribution": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "heldOut": { "type": "boolean" },
+        "frozenAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "name", "params"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "params": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "version", "features"],
+      "properties": {
+        "commit": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "config": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planned", "valid", "invalid", "failureReasons"],
+      "properties": {
+        "planned": { "type": "integer", "minimum": 0 },
+        "valid": { "type": "integer", "minimum": 0 },
+        "invalid": { "type": "integer", "minimum": 0 },
+        "repetitions": { "type": "integer", "minimum": 1 },
+        "failureReasons": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "numerator", "denominator", "n", "value", "ci", "unit", "source"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "numerator": { "type": ["number", "null"] },
+        "denominator": { "type": ["number", "null"] },
+        "n": { "type": "integer", "minimum": 0 },
+        "value": { "type": ["number", "null"] },
+        "ci": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "prefixItems": [
+                { "type": "number" },
+                { "type": "number" }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            }
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["ratio", "count", "usd", "ms", "tokens", "calls", "person-hours", "score"]
+        },
+        "source": { "type": "string", "minLength": 1 },
+        "slice": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "level", "target", "actual", "status", "evidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "level": { "type": "string", "enum": ["P0", "P1", "P2"] },
+        "target": { "type": "string", "minLength": 1 },
+        "actual": { "type": "string", "minLength": 1 },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "not_run", "not_applicable"]
+        },
+        "evidence": { "type": "string", "minLength": 1 },
+        "notes": { "type": "string" }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "rationale", "evidence"],
+      "properties": {
+        "level": { "type": "string", "enum": ["H0", "H1", "H2", "H3", "H4"] },
+        "rationale": { "type": "string", "minLength": 1 },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "kind": { "type": "string" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskId", "runId", "source", "summary"],
+      "properties": {
+        "taskId": { "type": "string", "minLength": 1 },
+        "runId": { "type": "string", "minLength": 1 },
+        "source": {
+          "type": "string",
+          "enum": ["provider", "tool", "runtime", "approval", "verification", "safety", "task", "environment", "unknown"]
+        },
+        "summary": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string" }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "campaignId"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "campaignId": { "type": "string", "minLength": 1 },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "conclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "notClaim"],
+      "properties": {
+        "claim": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "notClaim": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

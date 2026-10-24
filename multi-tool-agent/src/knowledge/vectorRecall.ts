@@ -1,4 +1,10 @@
-// src/knowledge/vectorRecall.ts — 语义向量召回层（在 FTS5 关键词检索之上叠加）
+// src/knowledge/vectorRecall.ts — 嵌入原语 + 旧 sqlite-vec 召回（已停写，保留兼容）
+//
+// ⚠️ 2026-10-24 起，KnowledgeHub 的读写路径已统一到切块级 RAG（rag_chunks + Flat/HNSW/IVF）。
+//    `VectorRecall` 不再由生产路径构造或写入，仅保留：
+//    ① `Embedder` / `HashEmbedder` / 向量编解码等原语（embeddings.ts、ragIndexStore.ts 仍在用）；
+//    ② 读取历史 `data_vec` 的兼容工具（迁移/清理旧库时可用）。
+//    新代码请走 `RagPipeline` / `KnowledgeHub.searchKnowledge`，不要新增对该类的依赖。
 //
 // 为什么需要这一层：
 //   现有 Repository 用 FTS5 做关键词检索（按词命中），但「按语义/意图」召回不了——

@@ -20,7 +20,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Tool, ToolContext } from '../types.js';
-import type { ApprovalRequest, ToolResult } from '../../types.js';
+import type { ApprovalDecision, ApprovalRequest, ToolResult } from '../../types.js';
 import { okResult, errResult } from '../types.js';
 import { resolveWorkspacePath } from '../shared/workspacePath.js';
 import { isSensitive } from './security.js';
@@ -341,17 +341,74 @@ export const submitChanges: Tool = {
     const s = await ensureSandbox(ctx);
     if (!s.ok) return s.result;
     const session = ctx.sandbox!;
+    const emit = ctx.emitEvent ?? (() => {});
+    const startedMs = Date.now();
 
-    const all = session.getChanges().filter((c) => c.status === 'staged' || c.status === 'verified');
-    const cmds = session.getCommands().filter((c) => c.status === 'pending');
-    if (!all.length && !cmds.length) {
+    const auto = ctx.autoPolicy?.enabled ? ctx.autoPolicy : undefined;
+    const allStaged = session.getChanges().filter((c) => c.status === 'staged' || c.status === 'verified');
+    const pendingCmds = session.getCommands().filter((c) => c.status === 'pending');
+    if (!allStaged.length && !pendingCmds.length) {
       return errResult('NOTHING_TO_SUBMIT', '没有待提交的改动或命令：先 create_file / edit_file / delete_file / copy_path / run_command', Date.now() - started);
     }
+
+    // 无人值守（仅定时任务）：危险操作不进审批，登记待确认队列（不落盘 / 不执行）。
+    const autoDeferred: Array<{ id: string; kind: 'delete' | 'command'; relPath?: string; command?: string }> = [];
+    let all = allStaged;
+    let cmds = pendingCmds;
+    if (auto) {
+      if (ctx.untrustedTainted) {
+        for (const c of allStaged) session.mark(c.relPath, 'denied');
+        const cmdsAll = session.getCommands();
+        for (let i = 0; i < cmdsAll.length; i++) {
+          if (cmdsAll[i].status === 'pending') session.markCommand(i, 'denied');
+        }
+        return errResult(
+          'AUTO_DEFERRED_TAINT',
+          '本 run 读取过疑似注入内容：无人值守自动放行已禁用，改动未落盘。请人工检查后重跑。',
+          Date.now() - started,
+        );
+      }
+      // 删除 → 待确认；create/edit 继续走阶梯与落盘
+      all = allStaged.filter((c) => {
+        if (c.op !== 'delete') return true;
+        const id = auto.createPending({
+          kind: 'delete',
+          payload: { repoPath: ctx.repoPath, relPath: c.relPath, baseHash: c.baseHash },
+        });
+        session.mark(c.relPath, 'deferred');
+        autoDeferred.push({ id, kind: 'delete', relPath: c.relPath });
+        return false;
+      });
+      // 宿主命令 → 一律待确认，不执行
+      const cmdsAll = session.getCommands();
+      for (let i = 0; i < cmdsAll.length; i++) {
+        const c = cmdsAll[i];
+        if (c.status !== 'pending') continue;
+        const id = auto.createPending({
+          kind: 'command',
+          payload: { repoPath: ctx.repoPath, command: c.command, shell: c.shell, cwdRel: c.cwdRel },
+        });
+        session.markCommand(i, 'deferred');
+        autoDeferred.push({ id, kind: 'command', command: c.command });
+      }
+      cmds = [];
+    }
+
+    if (!all.length && !cmds.length) {
+      if (autoDeferred.length) {
+        emit('change_deferred', { files: autoDeferred.filter((d) => d.kind === 'delete').map((d) => d.relPath), commands: autoDeferred.filter((d) => d.kind === 'command').length });
+        return okResult(
+          { stagedBefore: allStaged.length, applied: [], refused: [], deferred: autoDeferred, autoApproved: true },
+          Date.now() - startedMs,
+        );
+      }
+      return errResult('NOTHING_TO_SUBMIT', '没有待提交的改动或命令', Date.now() - started);
+    }
+
     const maxFiles = ctx.config.approval.maxFilesPerRequest;
     const changes = all.slice(0, maxFiles);
     const deferred = all.length - changes.length;
 
-    const emit = ctx.emitEvent ?? (() => {});
     const changedRels = changes.map((c) => c.relPath);
 
     // ① 检查阶梯（默认 L1：L0 逐文件语法 + tsc --incremental + 受影响测试/全量兜底；
@@ -428,7 +485,20 @@ export const submitChanges: Tool = {
       requiresExplicitConfirmation: risk.highRisk || undefined,
       requestedAt: new Date().toISOString(),
     };
-    const decision = await ctx.requestApproval!(request);
+    let decision: ApprovalDecision;
+    if (auto) {
+      const decidedAt = new Date().toISOString();
+      emit('approval_decided', {
+        approvalId,
+        value: 'allow_once',
+        actor: 'auto-policy',
+        autoByPolicy: true,
+        files: changes.map((c) => c.relPath),
+      });
+      decision = { approvalId, value: 'allow_once', actor: 'auto-policy', decidedAt, autoByPolicy: true };
+    } else {
+      decision = await ctx.requestApproval!(request);
+    }
 
     if (decision.value === 'deny') {
       for (const c of changes) session.mark(c.relPath, 'denied');
@@ -541,6 +611,8 @@ export const submitChanges: Tool = {
         hostVerify: verify,
         rolledBack: rolledBack.length ? rolledBack : undefined,
         summary: args.summary,
+        autoApproved: auto ? true : undefined,
+        deferred: autoDeferred.length ? autoDeferred : undefined,
       },
       Date.now() - started,
     );

@@ -1,12 +1,13 @@
 // src/index.ts — 服务入口
 import { loadEnv } from './env.js';
-import { loadConfig } from './config.js';
+import { assertHttpSecurity, isLoopbackHost, loadConfig } from './config.js';
 import { createApp } from './server.js';
 import { removeOrphanSandboxContainers } from './sandbox/docker.js';
 
 loadEnv();
 
 const config = loadConfig();
+assertHttpSecurity(config);
 
 // 开发服务器默认开启实时流式展示（Live View）。
 // 若需要与测试/CI 一致的「零增量事件」行为，显式设置 STREAM_LIVE_DELTAS=false。
@@ -14,19 +15,46 @@ if (process.env.STREAM_LIVE_DELTAS === undefined) config.stream.liveDeltas = tru
 // Mock 演示节奏：让无 Key 的演示也能肉眼看到文本逐字输出（真实 Provider 不受此影响）。
 if (process.env.MOCK_STREAM_CHUNK_DELAY_MS === undefined) config.stream.mockChunkDelayMs = 25;
 
-const { app, errors, recovery, mcpRuntime } = createApp(config);
+const { app, errors, recovery, mcpRuntime, scheduler, runtime, store, logger } = createApp(config);
 const port = config.port;
 
-// 优雅退出：至少把 MCP 会话关掉（stdio/HTTP 连接不泄漏）；3s 兜底强制退出。
+// 定时任务：只在服务进程里启动（buildRuntime/测试不启动，避免测试触发真实 run）。
+scheduler.start();
+
+// 优雅退出：停调度 → 停止接新请求 → 中止在飞 run → 关 MCP → flush 事件 → 关 DB。
+// 5s 兜底强制退出，避免 SSE/子进程挂住进程。
 let shuttingDown = false;
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    const force = setTimeout(() => process.exit(0), 3000);
-    force.unref();
-    void mcpRuntime.close().finally(() => process.exit(0));
-  });
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] 收到 ${signal}：停止调度与在飞任务…`);
+  const force = setTimeout(() => {
+    console.error('[shutdown] 超时，强制退出');
+    process.exit(1);
+  }, 5000);
+  force.unref();
+  scheduler.stop();
+  const cancelled = runtime.cancelAllActive();
+  server.close();
+  // 给 SSE/keep-alive 连接一个结束窗口，然后强制断开。
+  setTimeout(() => {
+    try {
+      server.closeAllConnections();
+    } catch {
+      /* 老版本 Node 没有该方法 */
+    }
+  }, 1000).unref();
+  const leftover = await runtime.waitForIdle(2000);
+  await mcpRuntime.close().catch(() => {});
+  logger.flush();
+  try {
+    store.close();
+  } catch {
+    /* 已关闭 */
+  }
+  console.log(`[shutdown] 完成（中止 ${cancelled} 个 run${leftover ? `，仍有 ${leftover} 个未退出` : ''}）`);
+  clearTimeout(force);
+  process.exit(0);
 }
 
 // 沙箱容器孤儿回收（M1'，原在 buildRuntime 内）：沙箱会话不跨进程，本次启动时残留的
@@ -80,13 +108,23 @@ process.on('uncaughtException', (e) => {
   console.error(`[fatal-ish] 未捕获异常（${r.id}）：见 ${config.log.errorLogPath}；服务继续运行，但状态可能不一致。`);
 });
 
-app.listen(port, () => {
-  console.log(`multi-tool-agent 已启动: http://localhost:${port}`);
+const server = app.listen(port, config.host, () => {
+  const shownHost = isLoopbackHost(config.host) ? 'localhost' : config.host;
+  console.log(`multi-tool-agent 已启动: http://${shownHost}:${port}`);
+  if (!isLoopbackHost(config.host)) {
+    console.log(`[security] 非回环监听：已启用 Bearer token（MTA_AUTH_TOKEN）`);
+  }
   console.log(`LLM 模式: ${config.llmMode}${config.llmMode === 'mock' ? '（Mock，无需 API Key）' : ''}`);
   console.log(
     `实时流式: ${config.stream.liveDeltas ? `开启（Mock 分片延迟 ${config.stream.mockChunkDelayMs}ms）` : '关闭（STREAM_LIVE_DELTAS=false）'}`,
   );
+  console.log(`定时任务: 已启动（进程内，每 30s 检查；服务停止期间不触发）`);
+  console.log(`Codex: ${config.codex.enabled ? `可用（${config.codex.bin}${config.codex.model ? ` · ${config.codex.model}` : ''}）` : '已禁用（MTA_CODEX_ENABLED=false）'}`);
   if (config.llmMode === 'mock') {
     console.log('提示: 通过 POST /api/runs 并指定 mockScenario=codebase-basic|research-basic 可运行演示。');
   }
 });
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => void shutdown(signal));
+}

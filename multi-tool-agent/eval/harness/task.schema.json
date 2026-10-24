@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/mta/eval/harness/task.schema.json",
+  "title": "Agent Harness Evaluation Task",
+  "description": "A frozen, machine-readable task contract for the Multi-tool Agent Runtime harness. Tasks are data, not prose: the same file must identify the fixture, budgets, allowed tools, success checks, safety expectations, and fault injections.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "track",
+    "category",
+    "difficulty",
+    "goal",
+    "runType",
+    "fixture",
+    "limits",
+    "expected"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,79}$",
+      "description": "Stable task id. Never reuse an id for a different task."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$",
+      "description": "Task contract version. Any semantic change requires a version bump."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "track": {
+      "type": "string",
+      "enum": ["deterministic", "real"],
+      "description": "deterministic = mock/fixed provider mechanics; real = fixed real model effectiveness."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "codebase",
+        "edit",
+        "research",
+        "misc",
+        "orchestration",
+        "rag",
+        "mcp",
+        "long_context",
+        "recovery",
+        "safety"
+      ]
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": ["L1", "L2", "L3"],
+      "description": "L1 single-step/single-file; L2 multi-step or verification; L3 long-context, orchestration, fault, or ambiguity."
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 20000
+    },
+    "runType": {
+      "type": "string",
+      "enum": ["codebase", "research", "misc", "orchestrator", "codex"]
+    },
+    "fixture": {
+      "$ref": "#/$defs/fixture"
+    },
+    "allowedTools": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "forbiddenTools": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "expected": {
+      "$ref": "#/$defs/expected"
+    },
+    "safety": {
+      "$ref": "#/$defs/safety"
+    },
+    "faultInjection": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/faultInjection" },
+      "uniqueItems": true
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 8000
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Escape hatch for evaluator-specific metadata. Do not move required contract fields here.",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reset"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["none", "directory", "archive", "git", "generated"]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path relative to the evaluation workspace, or an absolute path only in local-only runs."
+        },
+        "ref": {
+          "type": "string",
+          "description": "Git ref/commit when kind=git."
+        },
+        "reset": {
+          "type": "string",
+          "enum": ["per-run", "per-task", "none"]
+        },
+        "setup": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Commands executed inside the isolated fixture before the attempt. Never point at the real repository."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "expectedSha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxSteps",
+        "maxModelCalls",
+        "maxToolCalls",
+        "tokenBudget",
+        "costCapUsd",
+        "timeoutMs"
+      ],
+      "properties": {
+        "maxSteps": { "type": "integer", "minimum": 1 },
+        "maxModelCalls": { "type": "integer", "minimum": 1 },
+        "maxToolCalls": { "type": "integer", "minimum": 0 },
+        "tokenBudget": { "type": "integer", "minimum": 1 },
+        "costCapUsd": { "type": "number", "minimum": 0 },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "maxToolConcurrency": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "assertion": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable assertion. Prefer the structured form for automated checks."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "file_exists",
+                "file_not_exists",
+                "file_contains",
+                "file_excludes",
+                "json_path_equals",
+                "command",
+                "answer_contains",
+                "answer_regex",
+                "event_present",
+                "event_absent",
+                "state_equals",
+                "safety_metric",
+                "custom"
+              ]
+            },
+            "description": { "type": "string" },
+            "path": { "type": "string", "minLength": 1 },
+            "value": {},
+            "command": { "type": "string", "minLength": 1 },
+            "cwd": { "type": "string" },
+            "expectedExitCode": { "type": "integer" },
+            "pattern": { "type": "string" },
+            "jsonPath": { "type": "string" },
+            "eventType": { "type": "string" },
+            "minCount": { "type": "integer", "minimum": 0 },
+            "maxCount": { "type": "integer", "minimum": 0 },
+            "metricId": { "type": "string" },
+            "expected": {},
+            "params": { "type": "object", "additionalProperties": true },
+            "evidence": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["deterministic", "rubric", "llm"]
+        },
+        "rubric": {
+          "type": "string",
+          "description": "Required for rubric/llm judging; must state observable criteria, not a vibe."
+        },
+        "minScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "model": {
+          "type": "string",
+          "description": "Judge model identifier when kind=llm. Must be recorded in the scorecard."
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "mustPass", "mustNot", "requiredTools", "judge"],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": ["completed", "awaiting_user", "failed", "limit_reached", "cancelled"]
+        },
+        "mustPass": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/assertion" }
+        },
+        "mustNot": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/assertion" }
+        },
+        "requiredTools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "judge": { "$ref": "#/$defs/judge" },
+        "minRequirements": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional count of mustPass checks required. Defaults to all checks."
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowWrite": { "type": "boolean" },
+        "requireApproval": { "type": "boolean" },
+        "requireHighRiskConfirm": { "type": "boolean" },
+        "network": {
+          "type": "string",
+          "enum": ["none", "allowlisted", "internet"]
+        },
+        "sandbox": {
+          "type": "string",
+          "enum": ["none", "docker"]
+        },
+        "expectAskUser": { "type": "boolean" },
+        "untrustedContent": { "type": "boolean" },
+        "allowedPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "forbiddenPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "faultInjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "kind", "at", "count"],
+      "properties": {
+        "layer": {
+          "type": "string",
+          "enum": ["provider", "tool", "mcp", "runtime", "sandbox", "context"]
+        },
+        "kind": { "type": "string", "minLength": 1 },
+        "at": { "type": "string", "minLength": 1 },
+        "count": { "type": "integer", "minimum": 1 },
+        "params": { "type": "object", "additionalProperties": true },
+        "expected": { "type": "string" }
+      }
+    }
+  }
+}

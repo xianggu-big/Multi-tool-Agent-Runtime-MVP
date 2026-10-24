@@ -8,7 +8,7 @@
 import type { ErrorReporter } from '../runtime/errorReporter.js';
 import type { ToolRegistry } from '../tools/Registry.js';
 import { registerMcpTools } from './bridge.js';
-import { McpClient } from './client.js';
+import { McpClient, mcpToolJson, mcpToolText } from './client.js';
 import { mcpToolPrefix, redactMcpUrl, type McpServerConfig } from './config.js';
 import { HttpTransport } from './transport.js';
 
@@ -42,6 +42,8 @@ function redactSecret(text: string, secret: string | undefined): string {
 }
 
 export class McpClientRuntime {
+  /** 重连串行化：并发点两次「重连」不能互相 close/register 打架。 */
+  private reconnectChain: Promise<unknown> = Promise.resolve();
   private startPromise: Promise<void> | null = null;
   /** 按 server 名保存连接：重连时只替换目标 server，不影响其它 server。 */
   private clients = new Map<string, McpClient>();
@@ -97,6 +99,37 @@ export class McpClientRuntime {
     };
   }
 
+  /**
+   * 直接调用某个已连接 server 的工具（供「待确认 MCP 操作」在执行时复用）。
+   * 不经过 ToolRegistry/bridge，避免再次触发审批；调用方必须先完成用户确认。
+   */
+  async callTool(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<{ ok: boolean; message: string; detail?: Record<string, unknown> }> {
+    if (this.closed) return { ok: false, message: 'MCP runtime 已关闭' };
+    const spec = this.specs.find((s) => s.name === serverName);
+    if (!spec) return { ok: false, message: `未配置 MCP server: ${serverName}` };
+    if (!spec.names.includes(toolName)) {
+      return { ok: false, message: `MCP 工具 ${toolName} 不在 server ${serverName} 的白名单里` };
+    }
+    const status = this.statuses.find((s) => s.name === serverName);
+    const client = this.clients.get(serverName);
+    if (!status || status.state !== 'ready' || !client) {
+      return { ok: false, message: `MCP server ${serverName} 当前不可用（state=${status?.state ?? 'missing'}）` };
+    }
+    try {
+      const res = await client.callTool(toolName, args);
+      if (res.isError) {
+        return { ok: false, message: mcpToolText(res) || `MCP 工具 ${toolName} 执行失败` };
+      }
+      return { ok: true, message: `MCP 工具 ${toolName} 执行完成`, detail: { result: mcpToolJson(res) } };
+    } catch (e) {
+      return { ok: false, message: `MCP 工具 ${toolName} 调用失败：${(e as Error).message}` };
+    }
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -111,6 +144,12 @@ export class McpClientRuntime {
    *   - 不带 name = 全部重连；name 不存在 → 抛错，由 HTTP 层转 404。
    */
   async reconnect(name?: string): Promise<McpRuntimeStatus> {
+    const task = this.reconnectChain.then(() => this.reconnectNow(name));
+    this.reconnectChain = task.catch(() => {});
+    return task;
+  }
+
+  private async reconnectNow(name?: string): Promise<McpRuntimeStatus> {
     if (this.closed) throw new Error('MCP runtime 已关闭');
     const targets = name ? this.specs.filter((s) => s.name === name) : this.specs;
     if (name && !targets.length) throw new Error(`未配置 MCP server: ${name}`);
@@ -168,6 +207,7 @@ export class McpClientRuntime {
     try {
       await client.connect();
       const tools = await registerMcpTools(this.registry, client, {
+        serverName: spec.name,
         prefix: mcpToolPrefix(spec.name),
         permission: 'mcp:call',
         names: spec.names,

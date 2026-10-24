@@ -16,6 +16,7 @@ import { submitOrchestration } from './orchestrator/submitOrchestration.js';
 import { WRITE_TOOLS } from './codebase/writeTools.js';
 import { createKnowledgeSearchTool } from './knowledge/searchKnowledge.js';
 import { askUser } from './shared/askUser.js';
+import { codexExec } from './codex/codexExec.js';
 import type { KnowledgeHub } from '../knowledge/index.js';
 
 export function buildRegistry(knowledge?: KnowledgeHub): ToolRegistry {
@@ -37,6 +38,9 @@ export function buildRegistry(knowledge?: KnowledgeHub): ToolRegistry {
   r.register(submitOrchestration);
   // 人机协同：模型显式向用户提问（终态 awaiting_user，不是 completed）
   r.register(askUser);
+  // 本机 Codex CLI（外部 code agent）：是否进池由 toolPoolFor 的 codexEnabled 决定；
+  // 写模式在工具内部按 ctx.allowCodexWrite fail-closed。
+  r.register(codexExec);
   // 写能力（M1）：create/edit/delete/copy/run_command/submit_changes
   // 三重门禁：① 权限 codebase:write（只读 Agent 的工具池里没有它们 → 派生不出该权限）
   //          ② CODEBASE_WRITE_ENABLED=false 时返回 DISABLED

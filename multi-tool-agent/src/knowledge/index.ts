@@ -27,9 +27,18 @@ import {
   type OpenSessionInput,
   type AppendTurnInput,
 } from './context.js';
-import { VectorRecall, type Embedder, type VectorHit } from './vectorRecall.js';
-import { RagPipeline, type RagBuildOptions, type RagDoc, type RagSearchOptions } from './ragPipeline.js';
-import { createConfiguredEmbedder } from './embeddings.js';
+import {
+  RagPipeline,
+  type RagBuildOptions,
+  type RagDoc,
+  type RagSearchHit,
+  type RagSearchMode,
+  type RagSearchOptions,
+  type RagSearchResult,
+} from './ragPipeline.js';
+import { RagIndexStore, hashDocText, type RagIndexFingerprint } from './ragIndexStore.js';
+import { chunkDocument } from './chunking.js';
+import { createConfiguredEmbedder, createHashAsyncEmbedder } from './embeddings.js';
 import type { Tracer } from '../trace/Tracer.js';
 import type { ErrorReporter } from '../runtime/errorReporter.js';
 
@@ -38,6 +47,13 @@ export interface KnowledgeHubOptions {
   defaultActor?: string;
   /** 默认事件归属 runId（用于实时流推送；无则发 ephemeral 事件，不落盘） */
   defaultRunId?: string;
+  /**
+   * 写入后是否在后台异步刷新 RAG 索引（默认 false）。
+   * 关闭时：写入只把 cache 置空，下一次检索时同步增量补齐（单文档几百 ms）。
+   * 开启时：写入立刻返回，索引在后台补；后台失败不抛出，留给下次检索重试。
+   * 注意：测试/导入脚本默认关闭，避免后台任务与断言竞争。
+   */
+  backgroundIndex?: boolean;
 }
 
 export interface PutDataOptions {
@@ -47,6 +63,12 @@ export interface PutDataOptions {
   correlationId?: string;
 }
 
+/** RAG 文档数上限：默认 50,000（内存索引的安全线），可用 MTA_RAG_MAX_DOCS 覆盖 */
+function ragMaxDocs(): number {
+  const raw = Number(process.env.MTA_RAG_MAX_DOCS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 50_000;
+}
+
 export interface PutDataResult {
   item: DataItem;
   isCreate: boolean;
@@ -54,26 +76,86 @@ export interface PutDataResult {
   auditId: number;
 }
 
+/** 对外唯一检索语义：关键词 / 语义 / 混合都走同一条切块级 RAG 管线 */
+export type KnowledgeSearchMode = 'keyword' | 'semantic' | 'hybrid';
+
+export interface KnowledgeSearchOptions {
+  /** 返回多少条**文档级**命中（同一文档多个 chunk 只算一条），默认 20，上限 200 */
+  limit?: number;
+  /** 只检索某个 collection（下推到 RAG 元数据过滤） */
+  collection?: string;
+}
+
+/** 文档级命中：保留 DataItem 原字段，同时带上 RAG 的 chunk/得分/来源信息 */
+export interface KnowledgeDocHit extends DataItem {
+  /** 融合/重排后的原始分（不同 mode 不可直接比较） */
+  score: number;
+  /** 归一到 [0,1] 的分（同一批结果内可比） */
+  normalizedScore: number;
+  /** 命中来源：关键词 / 语义 / 两者都有（同一文档多个 chunk 的并集） */
+  matchedBy: 'keyword' | 'semantic' | 'both';
+  /** 代表该文档的最高分 chunk */
+  chunkId: string;
+  heading?: string;
+  /** 该文档命中的 chunk 数（用于观察长文被切碎后的召回情况） */
+  chunkHits: number;
+}
+
+export interface KnowledgeSearchResult {
+  query: string;
+  mode: KnowledgeSearchMode;
+  /** 实际执行的 RAG 模式（keyword / vector / hybrid_rerank） */
+  ragMode: RagSearchMode;
+  collection?: string;
+  count: number;
+  hits: KnowledgeDocHit[];
+  latencyMs: number;
+  timings: RagSearchResult['timings'];
+}
+
+/** 统一后的向量层统计（旧 `data_vec` 只作为历史表存在，不再写入） */
+export interface KnowledgeVectorStats {
+  engine: 'rag';
+  available: boolean;
+  built: boolean;
+  embedder: string;
+  dim: number;
+  /** 向量条数 = chunk 数 */
+  count: number;
+  docs: number;
+  chunks: number;
+}
+
 export class KnowledgeHub {
   readonly repository: Repository;
   readonly history: HistoryStore;
   readonly context: ContextStore;
-  /** 语义向量召回层（叠加在 FTS5 关键词检索之上；sqlite-vec 不可用时降级为内存重排） */
-  readonly vectorRecall: VectorRecall;
-  /** 切块级 RAG 管线（懒构建；写入/删除后失效） */
-  private ragCache: { pipeline: RagPipeline; builtAt: string; docs: number } | null = null;
+  /** 切块级 RAG 管线（懒构建；写入/删除后失效，下次检索按 doc_hash 增量刷新） */
+  private ragCache: {
+    pipeline: RagPipeline;
+    builtAt: string;
+    docs: number;
+    /** 本次刷新真正重算的文档数 / chunk 数（都为 0 表示全部命中缓存） */
+    reindexedDocs: number;
+    embeddedChunks: number;
+  } | null = null;
+  /** 切块 + 向量的持久化层：重启后从这里重建，不重跑 embedding */
+  readonly ragStore: RagIndexStore;
+  /** 正在进行的索引刷新（前台检索与后台补算共享同一个 Promise，避免并发重复构建） */
+  private indexSync: Promise<RagPipeline> | null = null;
+  /** 数据版本：每次写入/删除 +1；用来发现「构建期间又发生了写入」 */
+  private dataVersion = 0;
 
   constructor(
     private readonly db: Database.Database,
     private readonly tracer: Tracer,
     private readonly errors: ErrorReporter,
     private readonly opts: KnowledgeHubOptions = {},
-    embedder?: Embedder,
   ) {
     this.repository = new Repository(db);
     this.history = new HistoryStore(db);
     this.context = new ContextStore(db);
-    this.vectorRecall = new VectorRecall(db, embedder ? { embedder } : {});
+    this.ragStore = new RagIndexStore(db);
   }
 
   // ---------------------------------------------------------------- 数据仓库
@@ -95,14 +177,10 @@ export class KnowledgeHub {
       });
       return { item: r.item, isCreate: r.isCreate, auditId: audit.id };
     })();
-    // 语义向量同步（事务外：失败不得影响主流程；向量层自身静默降级）
-    // 按 data_items.id(TEXT) 直接对齐——vec0 用辅助列 data_id 关联，无需 rowid
-    try {
-      this.vectorRecall.upsert(item.id, item.searchText);
-    } catch {
-      /* 向量层失败不得影响数据写入 */
-    }
-    this.ragCache = null;
+    // 统一写入路径：不再维护第二套 data_vec 向量；下次检索/后台任务按 doc_hash 增量重建 RAG。
+    this.dataVersion += 1;
+    this.ragCache = null; // 下次检索按 doc_hash 增量刷新（命中持久化索引时不跑 embedding）
+    this.kickBackgroundIndex();
     const action = isCreate ? 'data_create' : 'data_update';
     this.emitDataEvent('data_changed', {
       correlationId,
@@ -148,34 +226,107 @@ export class KnowledgeHub {
       }
       return { deleted: d, auditId };
     })();
-    // 向量同步删除（按 data_id；事务外，失败不影响主流程）
     if (deleted) {
-      try {
-        this.vectorRecall.remove(deleted.id);
-      } catch {
-        /* ignore */
-      }
+      this.dataVersion += 1;
       this.ragCache = null;
+      this.kickBackgroundIndex();
       this.emitDataEvent('data_deleted', { correlationId, action: 'data_delete', resourceId: deleted.id, collection, itemId, auditId }, opts.runId);
     }
     return { deleted, correlationId, auditId };
   }
 
-  // ---------------------------------------------------------------- 语义向量召回
+  // ---------------------------------------------------------------- 统一检索（RAG）
 
-  /** 语义检索：按意思而非字面召回（FTS5 的补充） */
-  searchSemantic(query: string, opts: { limit?: number; collection?: string } = {}): VectorHit[] {
-    return this.vectorRecall.search(query, opts);
+  /**
+   * 对外唯一检索入口：关键词 / 语义 / 混合都走同一条切块级 RAG 管线。
+   *
+   * - `keyword`  → BM25（中文按字 bigram + 拉丁词，优于 FTS5 默认分词）
+   * - `semantic` → 向量近邻（Flat/HNSW/IVF，取决于索引构建参数）
+   * - `hybrid`   → BM25 + 向量 → RRF → 词法 rerank
+   *
+   * 命中按 `docId` 聚合：同一文档多个 chunk 只返回一次（取最高分 chunk），
+   * 避免长文档因为切块多而挤占其他文档的位置；`matchedBy` 是整篇文档的来源并集。
+   */
+  async searchKnowledge(
+    query: string,
+    opts: KnowledgeSearchOptions & { mode?: KnowledgeSearchMode } = {},
+  ): Promise<KnowledgeSearchResult> {
+    const mode = opts.mode ?? 'hybrid';
+    const limit = Math.max(1, Math.min(200, opts.limit ?? 20));
+    // 先多取 chunk，再按文档去重：否则一个长文档的多个 chunk 会把 doc 级 top-k 占满。
+    const chunkK = Math.min(500, Math.max(limit * 4, 40));
+    const ragMode: RagSearchMode = mode === 'keyword' ? 'keyword' : mode === 'semantic' ? 'vector' : 'hybrid_rerank';
+    const rag = await this.searchRag(query, {
+      mode: ragMode,
+      k: chunkK,
+      candidatePool: Math.max(chunkK * 2, 80),
+      filter: opts.collection ? (m) => m.collection === opts.collection : undefined,
+    });
+
+    const byDoc = new Map<string, { best: RagSearchHit; sources: Set<string>; chunkHits: number }>();
+    for (const h of rag.results) {
+      if (!h.docId) continue;
+      const existing = byDoc.get(h.docId);
+      if (!existing) {
+        byDoc.set(h.docId, { best: h, sources: new Set(h.sources), chunkHits: 1 });
+        continue;
+      }
+      existing.chunkHits += 1;
+      for (const s of h.sources) existing.sources.add(s);
+      if (h.normalizedScore > existing.best.normalizedScore) existing.best = h;
+    }
+
+    const hits: KnowledgeDocHit[] = [];
+    for (const { best, sources, chunkHits } of byDoc.values()) {
+      const item = this.repository.getById(best.docId);
+      if (!item) continue; // 索引里可能残留已删除文档的块，下次增量同步会清掉
+      hits.push({
+        ...item,
+        score: best.score,
+        normalizedScore: best.normalizedScore,
+        matchedBy: matchedByOf(sources),
+        chunkId: best.chunkId,
+        heading: best.heading,
+        chunkHits,
+      });
+    }
+    hits.sort((a, b) => b.normalizedScore - a.normalizedScore || b.score - a.score);
+    const top = hits.slice(0, limit);
+    return {
+      query,
+      mode,
+      ragMode,
+      collection: opts.collection,
+      count: top.length,
+      hits: top,
+      latencyMs: rag.latencyMs,
+      timings: rag.timings,
+    };
+  }
+
+  /** 语义检索（RAG vector 模式的兼容入口） */
+  async searchSemantic(query: string, opts: KnowledgeSearchOptions = {}): Promise<KnowledgeDocHit[]> {
+    return (await this.searchKnowledge(query, { ...opts, mode: 'semantic' })).hits;
+  }
+
+  /** 关键词检索（RAG BM25 模式的兼容入口；低层 FTS5 仍可用 `searchData`） */
+  async searchKeyword(query: string, opts: KnowledgeSearchOptions = {}): Promise<KnowledgeDocHit[]> {
+    return (await this.searchKnowledge(query, { ...opts, mode: 'keyword' })).hits;
   }
 
   /**
-   * 从 data_items 懒构建切块级 RAG 索引（chunk → embedding → BM25 + 向量索引）。
-   * 默认 Flat 精确索引；需要 HNSW/IVF 时传 indexKind。
+   * 从 data_items 增量构建/刷新切块级 RAG 索引（chunk → embedding → BM25 + 向量索引）。
+   *
+   * 持久化（P0）：chunk 正文 + 向量落在 rag_chunks，重启后只读盘重建内存索引，
+   * **不再重跑 embedding**（本机 979 文档：52.3s → 数十毫秒）。
+   * 增量：只重算 doc_hash 变化的文档；文档消失则级联删块。
+   * 失效：embedding 模型 / 维度 / 切块参数任一变化 → 指纹不匹配 → 整库重算。
+   * 默认 Flat 精确索引；需要 HNSW/IVF 时传 indexKind（仅评测用，不持久化索引结构）。
    */
   async rebuildRag(opts: RagBuildOptions = {}): Promise<RagPipeline> {
     // Repository.list 单页上限 500：必须显式分页，否则超过 500 条会静默截断。
     // 超过 5 万条时明确报错，避免一次 rebuild 把内存/embedding 成本打满。
-    const MAX_RAG_DOCS = 50_000;
+    const MAX_RAG_DOCS = ragMaxDocs();
     const docs: RagDoc[] = [];
     for (let offset = 0; ; offset += 500) {
       const page = this.repository.list({ limit: 500, offset });
@@ -195,26 +346,120 @@ export class KnowledgeHub {
         // 恰好 50,000 条应当允许；只有确实还有下一页时才拒绝。
         const extra = this.repository.list({ limit: 1, offset: docs.length });
         if (extra.length) {
-          throw new Error(`RAG 索引文档数超过上限 ${MAX_RAG_DOCS}，请分批构建或改用外部向量库`);
+          throw new Error(
+            `RAG 索引文档数超过上限 ${MAX_RAG_DOCS}：请分批构建、调大 MTA_RAG_MAX_DOCS，或改用外部向量库（内存索引在更大规模会先撑爆内存）`,
+          );
         }
         break;
       }
     }
+
     // 显式 opt-in：MTA_EMBEDDING_MODEL 存在时走真实 embedding；否则保持离线 hash。
-    const embedder = opts.embedder ?? createConfiguredEmbedder();
-    const pipeline = await RagPipeline.build(docs, {
-      chunk: { chunkSize: 512, overlap: 64 },
-      ...opts,
-      ...(embedder ? { embedder } : {}),
-    });
-    this.ragCache = { pipeline, builtAt: new Date().toISOString(), docs: docs.length };
+    const embedder = opts.embedder ?? createConfiguredEmbedder() ?? createHashAsyncEmbedder(256);
+    const chunk = { chunkSize: 512, overlap: 64, ...(opts.chunk ?? {}) };
+    const fingerprint: RagIndexFingerprint = {
+      model: embedder.name,
+      dim: embedder.dim,
+      chunk: `${chunk.chunkSize}/${chunk.overlap}`,
+    };
+    if (!this.ragStore.matches(fingerprint)) this.ragStore.reset(fingerprint);
+
+    const currentHashes = new Map(docs.map((d) => [d.id, hashDocText(d.text)]));
+    const indexed = this.ragStore.listDocHashes();
+    const removed = [...indexed.keys()].filter((id) => !currentHashes.has(id));
+    if (removed.length) this.ragStore.removeDocs(removed);
+
+    let reindexedDocs = 0;
+    let embeddedChunks = 0;
+    for (const d of docs) {
+      const hash = currentHashes.get(d.id)!;
+      if (indexed.get(d.id) === hash) continue;
+      const chunks = chunkDocument(d, chunk);
+      const vectors = chunks.length ? await embedder.embed(chunks.map((c) => c.embedText)) : [];
+      this.ragStore.replaceDoc(d.id, hash, chunks, vectors, fingerprint);
+      reindexedDocs += 1;
+      embeddedChunks += chunks.length;
+    }
+
+    const stored = this.ragStore.load();
+    const pipeline = RagPipeline.fromChunks(
+      stored.map((s) => s.chunk),
+      stored.map((s) => s.vector),
+      { ...opts, embedder },
+      docs,
+    );
+    this.ragCache = { pipeline, builtAt: new Date().toISOString(), docs: docs.length, reindexedDocs, embeddedChunks };
     return pipeline;
   }
 
-  /** 切块级混合检索（默认 hybrid_rerank）。首次调用会构建索引。 */
+  /** 切块级混合检索（默认 hybrid_rerank）。索引未就绪时按需构建（增量，命中持久化层时不跑 embedding）。 */
   async searchRag(query: string, opts: RagSearchOptions = {}) {
-    const pipeline = this.ragCache?.pipeline ?? (await this.rebuildRag());
+    const pipeline = await this.ensureIndex();
     return pipeline.search(query, opts);
+  }
+
+  /** 前台检索与后台补算共享同一个 in-flight 构建，避免并发重复构建 */
+  private ensureIndex(): Promise<RagPipeline> {
+    if (this.ragCache) return Promise.resolve(this.ragCache.pipeline);
+    if (!this.indexSync) {
+      const version = this.dataVersion;
+      this.indexSync = this.rebuildRag()
+        .then((pipeline) => {
+          // 构建期间又有写入：本次结果可能是旧的，作废 cache 让下一次补齐
+          if (this.dataVersion !== version) this.ragCache = null;
+          return pipeline;
+        })
+        .finally(() => {
+          this.indexSync = null;
+        });
+    }
+    return this.indexSync;
+  }
+
+  /**
+   * 后台补算：仅当 KnowledgeHubOptions.backgroundIndex=true 时生效。
+   * 写入路径因此保持 O(1)，不会阻塞调用方；失败只吞掉，交给下一次检索重试。
+   */
+  private kickBackgroundIndex(): void {
+    if (!this.opts.backgroundIndex) return;
+    void this.ensureIndex()
+      .then(() => {
+        if (!this.ragCache && this.opts.backgroundIndex) this.kickBackgroundIndex();
+      })
+      .catch(() => {
+        /* 后台失败不抛；下次检索会再试 */
+      });
+  }
+
+  /** 是否开启了「写入后台补索引」（供状态接口展示） */
+  get backgroundIndexEnabled(): boolean {
+    return !!this.opts.backgroundIndex;
+  }
+
+  /** RAG 索引状态（无论是否构建过都返回；供 `GET /api/rag/status` 观测） */
+  ragStatus() {
+    return {
+      engine: 'rag' as const,
+      built: !!this.ragCache,
+      /** 是否正在构建/刷新（前台检索与后台补算共享同一个任务） */
+      indexing: !!this.indexSync,
+      backgroundIndex: !!this.opts.backgroundIndex,
+      cache: this.ragCache
+        ? {
+            builtAt: this.ragCache.builtAt,
+            docs: this.ragCache.docs,
+            lastSync: {
+              reindexedDocs: this.ragCache.reindexedDocs,
+              embeddedChunks: this.ragCache.embeddedChunks,
+            },
+          }
+        : null,
+      store: this.ragStore.stats(),
+      /** 旧 sqlite-vec 轨已停写；历史表若存在可手动清理（见 docs/KNOWLEDGE_SYSTEM.md） */
+      legacyVector: { active: false, table: 'data_vec' as const },
+      /** 当前允许的最大文档数（`MTA_RAG_MAX_DOCS`，默认 50000） */
+      docLimit: ragMaxDocs(),
+    };
   }
 
   /** RAG 索引状态；尚未构建时返回 null（不触发构建）。 */
@@ -224,34 +469,18 @@ export class KnowledgeHub {
       ...this.ragCache.pipeline.stats(),
       builtAt: this.ragCache.builtAt,
       cachedDocs: this.ragCache.docs,
+      /** 最近一次刷新的增量指标：都为 0 表示全部命中持久化索引（未跑 embedding） */
+      lastSync: {
+        reindexedDocs: this.ragCache.reindexedDocs,
+        embeddedChunks: this.ragCache.embeddedChunks,
+      },
+      store: this.ragStore.stats(),
     };
   }
 
-  /**
-   * 混合检索：关键词(FTS5) ∪ 语义(向量)，按得分融合后去重。
-   * - 关键词命中：score = 1.0（精确词命中优先）；
-   * - 语义命中：score = 向量相似度 ∈ (0,1]；
-   * - 同一条同时命中两条路径：取 max（不让低分语义压低精确命中）。
-   */
-  searchHybrid(query: string, opts: { limit?: number; collection?: string } = {}): (DataItem & { score: number; matchedBy: 'keyword' | 'semantic' | 'both' })[] {
-    const limit = Math.max(1, Math.min(200, opts.limit ?? 20));
-    const kw = this.repository.search(query, { limit: limit * 2, collection: opts.collection });
-    const sem = this.vectorRecall.search(query, { limit: limit * 2, collection: opts.collection });
-    const byId = new Map<string, DataItem & { score: number; matchedBy: 'keyword' | 'semantic' | 'both' }>();
-    for (const it of kw) {
-      byId.set(it.id, { ...it, score: 1.0, matchedBy: 'keyword' });
-    }
-    for (const h of sem) {
-      const existing = byId.get(h.id);
-      if (existing) {
-        existing.score = Math.max(existing.score, h.score);
-        existing.matchedBy = 'both';
-      } else {
-        const item = this.repository.getById(h.id);
-        if (item) byId.set(h.id, { ...item, score: h.score, matchedBy: 'semantic' });
-      }
-    }
-    return [...byId.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+  /** 混合检索（RAG BM25 + 向量 → RRF → rerank 的兼容入口） */
+  async searchHybrid(query: string, opts: KnowledgeSearchOptions = {}): Promise<KnowledgeDocHit[]> {
+    return (await this.searchKnowledge(query, { ...opts, mode: 'hybrid' })).hits;
   }
 
   // ---------------------------------------------------------------- 上下文管理
@@ -325,13 +554,26 @@ export class KnowledgeHub {
     repository: ReturnType<Repository['stats']>;
     audit: ReturnType<HistoryStore['stats']>;
     context: ReturnType<ContextStore['stats']>;
-    vector: ReturnType<VectorRecall['stats']>;
+    vector: KnowledgeVectorStats;
   } {
+    const store = this.ragStore.stats();
+    const cached = this.ragCache?.pipeline.stats();
+    const fp = store.fingerprint;
     return {
       repository: this.repository.stats(),
       audit: this.history.stats(),
       context: this.context.stats(),
-      vector: this.vectorRecall.stats(),
+      vector: {
+        engine: 'rag',
+        available: true,
+        built: !!this.ragCache,
+        // 未构建时用持久化指纹（上次构建的参数）；全新库回落到默认离线嵌入器。
+        embedder: cached?.embedder ?? fp?.model ?? defaultEmbedderName(),
+        dim: cached?.dim ?? fp?.dim ?? defaultEmbedderDim(),
+        count: store.chunks,
+        docs: store.docs,
+        chunks: store.chunks,
+      },
     };
   }
 
@@ -350,4 +592,33 @@ export class KnowledgeHub {
       /* 事件出口失败不得影响主流程 */
     }
   }
+}
+
+/** 文档级 `matchedBy`：同一文档可能有多个 chunk 分别来自关键词/向量两路 */
+function matchedByOf(sources: Set<string>): 'keyword' | 'semantic' | 'both' {
+  const keyword = sources.has('keyword');
+  const vector = sources.has('vector');
+  if (keyword && vector) return 'both';
+  if (keyword) return 'keyword';
+  return 'semantic';
+}
+
+/** 未构建索引时展示的默认嵌入器（与 rebuildRag 的默认选择保持一致） */
+function defaultEmbedderInfo(): { name: string; dim: number } {
+  try {
+    const configured = createConfiguredEmbedder();
+    if (configured) return { name: configured.name, dim: configured.dim };
+  } catch {
+    /* 配置不完整（如缺 Key）时退回离线嵌入器，状态接口不该因此 500 */
+  }
+  const fallback = createHashAsyncEmbedder(256);
+  return { name: fallback.name, dim: fallback.dim };
+}
+
+function defaultEmbedderName(): string {
+  return defaultEmbedderInfo().name;
+}
+
+function defaultEmbedderDim(): number {
+  return defaultEmbedderInfo().dim;
 }

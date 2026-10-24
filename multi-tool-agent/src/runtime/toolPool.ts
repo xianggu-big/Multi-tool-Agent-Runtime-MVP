@@ -12,9 +12,12 @@ export interface ToolPoolOptions {
   allowSelfTools: boolean;
   /** 已就绪的 MCP 工具（mcp_<server>_<tool>） */
   mcpTools: string[];
+  /** 本机 Codex CLI 是否启用（codex_exec 是否进池） */
+  codexEnabled?: boolean;
 }
 
 export function toolPoolFor(runType: RunType, opts: ToolPoolOptions): string[] {
+  if (runType === 'codex') return [];
   if (runType === 'codebase') {
     return [
       'search_files',
@@ -23,6 +26,7 @@ export function toolPoolFor(runType: RunType, opts: ToolPoolOptions): string[] {
       ...(opts.runTestsEnabled ? ['run_tests'] : []),
       'knowledge_search',
       'ask_user',
+      ...(opts.codexEnabled ? ['codex_exec'] : []),
       ...opts.mcpTools,
     ];
   }
@@ -36,7 +40,15 @@ export function toolPoolFor(runType: RunType, opts: ToolPoolOptions): string[] {
       'delegate_subtasks',
       'submit_orchestration',
       ...(opts.allowSelfTools
-        ? ['list_files', 'search_files', 'read_file', 'dir_stats', 'knowledge_search', ...opts.mcpTools]
+        ? [
+            'list_files',
+            'search_files',
+            'read_file',
+            'dir_stats',
+            'knowledge_search',
+            ...(opts.codexEnabled ? ['codex_exec'] : []),
+            ...opts.mcpTools,
+          ]
         : []),
       'ask_user',
     ];

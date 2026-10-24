@@ -1,15 +1,15 @@
 // src/server.ts — HTTP API（含 SSE 实时事件）
 import express from 'express';
-import { existsSync, readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { resolve } from 'node:path';
-import type { RuntimeConfig } from './config.js';
+import { assertHttpSecurity, type RuntimeConfig } from './config.js';
 import { buildRuntime } from './runtime/index.js';
 import { recordToResult } from './store/SqliteStore.js';
 import { buildTraceSnapshot } from './trace/Tracer.js';
 import { buildRunReport, toReportRun } from './report/runReport.js';
 import { listRunReportMetas } from './report/runReportFiles.js';
-import type { RunInput, RunType, TraceEvent, TraceEventType, LLMGenerationParams, ApprovalDecisionValue, ToolChoice, OrchestrationGate } from './types.js';
+import type { RunInput, RunType, TraceEvent, TraceEventType, ApprovalDecisionValue, ToolChoice, OrchestrationGate } from './types.js';
 import { LLM_PRESETS, PARAM_META, getPreset } from './llm/presets.js';
 import { testLlmConnection, normalizeBaseUrl } from './llm/testConnection.js';
 import { createProvider } from './llm/index.js';
@@ -20,11 +20,16 @@ import { TOOL_PERMISSION } from './runtime/AgentRuntime.js';
 import { toolPoolFor } from './runtime/toolPool.js';
 import { adviseOrchestration, scanRepoFacts } from './runtime/orchestrationGate.js';
 import { aggregateSubtaskStats } from './runtime/subtaskStats.js';
+import { parseRunLimits } from './runtime/runLimits.js';
+import { FixedWindowLimiter } from './runtime/rateLimit.js';
 import { getEnv } from './env.js';
 import { clampNumber, parseGenerationParams } from './llm/params.js';
 import { diagnoseRun } from './observability/latency.js';
 import { McpServer } from './mcp/server.js';
 import { McpClientRuntime } from './mcp/bootstrap.js';
+import { SchedulerService } from './scheduler/service.js';
+import { computeNextRunAt, parseDailyTime } from './scheduler/time.js';
+import type { ScheduleOptions, ScheduleRecord } from './scheduler/types.js';
 
 /** 任务终态事件（收到即关闭 SSE 连接） */
 const TERMINAL_EVENT_TYPES = new Set<TraceEventType>([
@@ -49,8 +54,12 @@ export interface RunRequestValidation {
  */
 export function validateRunRequest(body: Record<string, unknown>, config: RuntimeConfig): RunRequestValidation {
   const runType = body.runType as RunType;
-  if (runType !== 'codebase' && runType !== 'research' && runType !== 'misc' && runType !== 'orchestrator') {
-    return { error: 'runType 必须为 codebase、research、misc 或 orchestrator' };
+  if (runType !== 'codebase' && runType !== 'research' && runType !== 'misc' && runType !== 'orchestrator' && runType !== 'codex') {
+    return { error: 'runType 必须为 codebase、research、misc、orchestrator 或 codex' };
+  }
+  // 无人值守自动放行 / schedule 归属只能由服务端定时任务设置，不接受客户端伪造
+  if (body.autoApprove !== undefined || body.scheduleId !== undefined) {
+    return { error: 'autoApprove / scheduleId 只能由服务端定时任务设置，不能通过 API 提交' };
   }
   if (typeof body.goal !== 'string' || !body.goal.trim()) {
     return { error: 'goal 不能为空' };
@@ -134,7 +143,7 @@ export function validateRunRequest(body: Record<string, unknown>, config: Runtim
   const presetKeyOptional = getPreset(llm?.provider ?? config.llm.presetId)?.keyOptional ?? false;
   const effectiveLlmKey =
     llm?.apiKey ?? config.llm.apiKey ?? presetEnvKey ?? config.openai.apiKey;
-  if (effectiveLlmMode === 'openai' && !effectiveLlmKey && !presetKeyOptional) {
+  if (effectiveLlmMode === 'openai' && runType !== 'codex' && !effectiveLlmKey && !presetKeyOptional) {
     const preset = getPreset(llm?.provider ?? config.llm.presetId);
     return {
       error: `已选择 ${preset?.label ?? 'OpenAI 兼容'} 模式但未提供 API Key：请在界面填写，或设置 ${
@@ -273,6 +282,32 @@ export function validateRunRequest(body: Record<string, unknown>, config: Runtim
     return { input };
   }
 
+  if (runType === 'codex') {
+    if (!config.codex.enabled) {
+      return { error: 'Codex 已禁用（MTA_CODEX_ENABLED=false）' };
+    }
+    if (typeof body.repoPath !== 'string' || !body.repoPath.trim()) {
+      return { error: 'codex 任务必须提供 repoPath（工作区根目录）' };
+    }
+    const abs = resolve(body.repoPath.trim());
+    if (!existsSync(abs)) {
+      return { error: `repoPath 不存在: ${abs}（收到输入: "${body.repoPath}"）。` };
+    }
+    input.repoPath = abs;
+    const c = (body.codex ?? {}) as Record<string, unknown>;
+    input.codex = {
+      allowWrite: c.allowWrite === true,
+      resumeThreadId: typeof c.resumeThreadId === 'string' ? c.resumeThreadId.slice(0, 100) : undefined,
+      workspaceId: typeof c.workspaceId === 'string' ? c.workspaceId.slice(0, 100) : undefined,
+      model: typeof c.model === 'string' ? c.model.slice(0, 100) : undefined,
+      safetyPrompt: typeof c.safetyPrompt === 'string' ? c.safetyPrompt.slice(0, 4000) : undefined,
+      dangerPatterns: Array.isArray(c.dangerPatterns)
+        ? c.dangerPatterns.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, 50)
+        : undefined,
+    };
+    return { input };
+  }
+
   if (runType === 'codebase') {
     if (typeof body.repoPath !== 'string' || !body.repoPath.trim()) {
       return { error: 'codebase 任务必须提供 repoPath' };
@@ -296,8 +331,221 @@ export function validateRunRequest(body: Record<string, unknown>, config: Runtim
   return { input };
 }
 
+export interface ScheduleValidation {
+  record?: ScheduleRecord;
+  error?: string;
+}
+
+const SCHEDULE_AGENTS: RunType[] = ['codebase', 'research', 'misc', 'orchestrator', 'codex'];
+
+/**
+ * 解析/校验定时任务请求体（纯函数，便于测试）。
+ * 安全约束：**不接受 apiKey**；autoApprove 必须与 allowWrite 同时开启；allowWrite 只对
+ * orchestrator / codex 有意义；repoPath 必须是真实存在的目录。
+ */
+export function parseScheduleRequest(
+  body: Record<string, unknown>,
+  config: RuntimeConfig,
+  existing: ScheduleRecord | null = null,
+): ScheduleValidation {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const agentRaw = b.agent ?? existing?.agent;
+  if (!SCHEDULE_AGENTS.includes(agentRaw as RunType)) {
+    return { error: 'agent 必须是 codebase / research / misc / orchestrator / codex' };
+  }
+  const agent = agentRaw as RunType;
+  if (agent === 'codex' && !config.codex.enabled) {
+    return { error: 'Codex 已禁用（MTA_CODEX_ENABLED=false）' };
+  }
+
+  const goal = typeof b.goal === 'string' ? b.goal.trim() : existing?.goal ?? '';
+  if (!goal) return { error: 'goal 不能为空' };
+  if (goal.length > 20_000) return { error: 'goal 过长（最多 20000 字符）' };
+
+  let repoPath = existing?.repoPath;
+  if (b.repoPath !== undefined) {
+    repoPath = typeof b.repoPath === 'string' && b.repoPath.trim() ? resolve(b.repoPath.trim()) : undefined;
+  }
+  if (['codebase', 'misc', 'orchestrator', 'codex'].includes(agent)) {
+    if (!repoPath) return { error: `${agent} 定时任务必须提供 repoPath（工作区根目录）` };
+    if (!existsSync(repoPath)) return { error: `repoPath 不存在: ${repoPath}` };
+  }
+
+  const frequencyRaw = b.frequency ?? existing?.frequency ?? 'once';
+  if (frequencyRaw !== 'once' && frequencyRaw !== 'daily') return { error: 'frequency 必须是 once 或 daily' };
+  const frequency = frequencyRaw as 'once' | 'daily';
+  const runAtRaw = b.runAt !== undefined ? b.runAt : existing?.runAt;
+  if (typeof runAtRaw !== 'string' || !runAtRaw.trim()) {
+    return { error: 'runAt 不能为空（once: ISO 时间；daily: HH:mm）' };
+  }
+  const runAt = runAtRaw.trim();
+  if (frequency === 'daily') {
+    if (!parseDailyTime(runAt)) return { error: 'daily 的 runAt 必须是 HH:mm（例如 09:30）' };
+  } else {
+    const t = new Date(runAt);
+    if (Number.isNaN(t.getTime())) return { error: 'once 的 runAt 必须是合法 ISO 时间' };
+    if (!existing && t.getTime() <= now.getTime()) return { error: 'once 的 runAt 必须在未来' };
+  }
+
+  const bool = (k: string, fallback: boolean): boolean =>
+    typeof b[k] === 'boolean' ? (b[k] as boolean) : fallback;
+  const allowWrite = bool('allowWrite', existing?.allowWrite ?? false);
+  const autoApprove = bool('autoApprove', existing?.autoApprove ?? false);
+  if (allowWrite && agent !== 'orchestrator' && agent !== 'codex') {
+    return { error: 'allowWrite 仅支持 orchestrator 或 codex（其他 Agent 是只读的）' };
+  }
+  if (autoApprove && !allowWrite) return { error: 'autoApprove 必须同时开启 allowWrite' };
+  const allowRunTests = bool('allowRunTests', existing?.allowRunTests ?? false);
+  const skipIfRunning = bool('skipIfRunning', existing?.skipIfRunning ?? true);
+  const enabled = bool('enabled', existing?.enabled ?? true);
+
+  const safetyPromptRaw = b.safetyPrompt !== undefined ? b.safetyPrompt : existing?.safetyPrompt;
+  if (safetyPromptRaw !== undefined && typeof safetyPromptRaw !== 'string') {
+    return { error: 'safetyPrompt 必须是字符串' };
+  }
+  const safetyPrompt = typeof safetyPromptRaw === 'string' ? safetyPromptRaw.slice(0, 4000) : undefined;
+  const dangerPatterns = Array.isArray(b.dangerPatterns)
+    ? (b.dangerPatterns as unknown[]).filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, 50)
+    : existing?.dangerPatterns ?? [];
+
+  // 非敏感运行参数（**绝不含 apiKey**；Key 一律来自服务端环境变量）
+  const optRaw = (b.options ?? {}) as Record<string, unknown>;
+  const options: ScheduleOptions = { ...(existing?.options ?? {}) };
+  if (optRaw.limits !== undefined) {
+    if (!optRaw.limits || typeof optRaw.limits !== 'object' || Array.isArray(optRaw.limits)) {
+      return { error: 'options.limits 必须是对象' };
+    }
+    // 与 POST /api/runs 共用同一套预算边界，禁止定时任务绕过（负数/超大值/字符串）。
+    const parsedLimits = parseRunLimits(optRaw.limits as Record<string, unknown>);
+    if (parsedLimits.error) return { error: `options.limits.${parsedLimits.error}` };
+    options.limits = { ...(existing?.options.limits ?? {}), ...parsedLimits.values };
+  }
+  if (optRaw.llm && typeof optRaw.llm === 'object') {
+    const l = optRaw.llm as Record<string, unknown>;
+    const prev = existing?.options.llm ?? {};
+    const provider = typeof l.provider === 'string' ? l.provider : prev.provider;
+    let params = prev.params;
+    if (l.params !== undefined) {
+      const parsedParams = parseGenerationParams(l.params);
+      if (parsedParams.error) return { error: `options.llm.params.${parsedParams.error}` };
+      params = parsedParams.params;
+    }
+    options.llm = {
+      ...prev,
+      provider,
+      model: typeof l.model === 'string' ? l.model.slice(0, 100) : prev.model,
+      params,
+    };
+    if (options.llm.provider && !getPreset(options.llm.provider)) {
+      return { error: `未知的 LLM Provider 预设: ${options.llm.provider}` };
+    }
+  }
+  if (optRaw.orchestration && typeof optRaw.orchestration === 'object') {
+    const o = optRaw.orchestration as Record<string, unknown>;
+    const prev = existing?.options.orchestration ?? {};
+    let maxWidth = prev.maxWidth;
+    if (o.maxWidth !== undefined) {
+      const n = Number(o.maxWidth);
+      if (!Number.isInteger(n) || n < 1 || n > config.subagent.maxWidth) {
+        return { error: `orchestration.maxWidth 必须是 1~${config.subagent.maxWidth} 的整数` };
+      }
+      maxWidth = n;
+    }
+    const allowedSpecs = Array.isArray(o.allowedSpecs)
+      ? (o.allowedSpecs as unknown[]).filter((x): x is string => typeof x === 'string')
+      : prev.allowedSpecs;
+    options.orchestration = {
+      ...prev,
+      maxWidth,
+      allowedSpecs,
+      allowSelfTools: typeof o.allowSelfTools === 'boolean' ? o.allowSelfTools : prev.allowSelfTools,
+      allowWriteSpecs: typeof o.allowWriteSpecs === 'boolean' ? o.allowWriteSpecs : prev.allowWriteSpecs,
+      strictVerify: typeof o.strictVerify === 'boolean' ? o.strictVerify : prev.strictVerify,
+    };
+    if (options.orchestration.allowedSpecs) {
+      const unknown = options.orchestration.allowedSpecs.filter((id) => !listSpecIds().includes(id));
+      if (unknown.length) return { error: `未知的子 Agent 规格: ${unknown.join(', ')}` };
+    }
+  }
+  if (optRaw.misc && typeof optRaw.misc === 'object') {
+    const m = optRaw.misc as Record<string, unknown>;
+    const st = m.subtask;
+    if (st !== undefined && !['inventory', 'locate', 'read', 'lint', 'other'].includes(String(st))) {
+      return { error: 'misc.subtask 只能是 inventory / locate / read / lint / other' };
+    }
+    options.misc = { subtask: st as ScheduleOptions['misc'] extends undefined ? never : 'inventory' | 'locate' | 'read' | 'lint' | 'other' | undefined };
+  }
+  if (optRaw.codex && typeof optRaw.codex === 'object') {
+    const c = optRaw.codex as Record<string, unknown>;
+    options.codex = {
+      allowWrite: typeof c.allowWrite === 'boolean' ? c.allowWrite : undefined,
+      model: typeof c.model === 'string' ? c.model.slice(0, 100) : undefined,
+      safetyPrompt: typeof c.safetyPrompt === 'string' ? c.safetyPrompt.slice(0, 4000) : undefined,
+      dangerPatterns: Array.isArray(c.dangerPatterns)
+        ? (c.dangerPatterns as unknown[]).filter((x): x is string => typeof x === 'string')
+        : undefined,
+      isolateRead: typeof c.isolateRead === 'boolean' ? c.isolateRead : undefined,
+      workspaceId: typeof c.workspaceId === 'string' ? c.workspaceId.slice(0, 100) : undefined,
+    };
+  }
+
+  const nextRunAt =
+    existing && existing.frequency === frequency && existing.runAt === runAt
+      ? existing.nextRunAt
+      : computeNextRunAt({ frequency, runAt }, now) ?? undefined;
+  if (!nextRunAt && enabled) {
+    return { error: '无法计算下次运行时间（一次性任务的 runAt 已过去？）' };
+  }
+
+  const nameRaw = b.name !== undefined ? b.name : existing?.name;
+  const name =
+    typeof nameRaw === 'string' && nameRaw.trim()
+      ? nameRaw.trim().slice(0, 200)
+      : `${agent} · ${goal.slice(0, 40)}`;
+
+  const record: ScheduleRecord = {
+    id: existing?.id ?? `sch_${randomUUID().slice(0, 8)}`,
+    name,
+    agent,
+    goal,
+    repoPath,
+    frequency,
+    runAt,
+    enabled,
+    allowWrite,
+    autoApprove,
+    safetyPrompt,
+    dangerPatterns,
+    allowRunTests,
+    skipIfRunning,
+    options,
+    nextRunAt,
+    lastRunAt: existing?.lastRunAt,
+    lastRunId: existing?.lastRunId,
+    lastStatus: existing?.lastStatus,
+    lastError: existing?.lastError,
+    createdAt: existing?.createdAt ?? nowIso,
+    updatedAt: nowIso,
+  };
+  return { record };
+}
+
 export function createApp(config: RuntimeConfig) {
-  const { store, runtime, hub, logger, registry, errors, knowledge, verification, recovery } = buildRuntime(config);
+  assertHttpSecurity(config);
+  const { store, runtime, hub, logger, registry, errors, knowledge, verification, recovery, pendingActions } = buildRuntime(config);
+
+  // 定时任务：只在这里组装，由 src/index.ts 显式 start()（测试/演示不触发真实 run）。
+  const scheduler = new SchedulerService({
+    store,
+    enqueue: (input) => {
+      if (input.runType === 'codex') return runtime.enqueue(input);
+      return runtime.enqueue(input, createProvider(config, input).provider);
+    },
+    log: (msg) => console.log(msg),
+  });
 
   // MCP 客户端（Streamable HTTP）：默认关闭；配置了 MTA_MCP_SERVERS 才连接。
   // 单个 server 失败只标 error，不阻塞 HTTP 服务；工具名回填后由 AgentRuntime 按 runType 暴露。
@@ -308,6 +556,8 @@ export function createApp(config: RuntimeConfig) {
     (names) => { config.mcp.toolNames = names; },
   );
   void mcpRuntime.start();
+  // 待确认 MCP 操作：用户确认后直接走已连接 client，不再重复审批。
+  pendingActions.setMcpExecutor(async (call) => mcpRuntime.callTool(call.server, call.tool, call.args));
 
   /** 从 run_started 事件里取仓库路径（RunRecord 不持久化 repoPath；事件是唯一真值） */
   const repoPathOfRun = (runId: string): string | null => {
@@ -385,12 +635,91 @@ export function createApp(config: RuntimeConfig) {
   }
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+  // 基础安全响应头：不引入 CSP（当前 UI 是内联脚本/样式，CSP 需要先改造构建）。
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+  // 浏览器错误上报是无需认证也可到达的写入口（health 之外），单独限流。
+  const clientErrorLimiter = new FixedWindowLimiter(config.clientErrorsPerMinute);
+  const streamState = { connections: 0, droppedEphemeral: 0 };
+
+  // 认证中间件（可选）：只有配置 MTA_AUTH_TOKEN 时启用。
+  // 默认 host=127.0.0.1；一旦监听非回环地址，assertHttpSecurity 会强制要求 token。
+  // 浏览器首次可用 `/?token=<token>` 引导写入 HttpOnly Cookie，之后同源 fetch 自动携带。
+  if (config.authToken) {
+    app.use((req, res, next) => {
+      const token = config.authToken!;
+      if (req.path === '/api/health') return next();
+
+      // 浏览器引导：token 只出现在一次 GET /?token=... 中，随后写 Cookie 并重定向。
+      if (req.method === 'GET' && req.path === '/' && typeof req.query.token === 'string') {
+        if (!tokenMatches(req.query.token, token)) {
+          return res.status(401).json({ error: '无效的访问 token' });
+        }
+        res.cookie('mta_token', token, {
+          httpOnly: true,
+          sameSite: 'strict',
+          secure: false,
+          maxAge: 30 * 24 * 60 * 60 * 1000,
+          path: '/',
+        });
+        return res.redirect(302, '/');
+      }
+
+      const provided =
+        bearerToken(req.headers.authorization) ??
+        (typeof req.headers['x-mta-token'] === 'string' ? req.headers['x-mta-token'] : undefined) ??
+        cookieValue(req.headers.cookie, 'mta_token');
+
+      if (provided && tokenMatches(provided, token)) return next();
+
+      if (req.path.startsWith('/api/') || req.path === '/mcp') {
+        res.setHeader('WWW-Authenticate', 'Bearer');
+        return res.status(401).json({ error: '需要认证：Authorization: Bearer <MTA_AUTH_TOKEN>' });
+      }
+      return next();
+    });
+  }
 
   app.get('/api/health', (_req, res) => {
-    res.json({
-      ok: true,
+    const db = store.ping();
+    const mcp = mcpRuntime.status();
+    const rag = knowledge.ragStatus();
+    const sch = scheduler.status();
+    const warnings: string[] = [];
+    if (!db.ok) warnings.push('db');
+    const mcpErrors = mcp.servers.filter((s) => s.state === 'error').map((s) => s.name);
+    if (mcpErrors.length) warnings.push(`mcp:${mcpErrors.join(',')}`);
+    if (sch.lastError) warnings.push('scheduler');
+    res.status(db.ok ? 200 : 503).json({
+      ok: db.ok,
+      degraded: warnings.length > 0,
+      warnings,
       llmMode: config.llmMode,
       mockDefault: config.llmMode === 'mock',
+      components: {
+        db,
+        mcp: {
+          configured: mcp.configured,
+          ready: mcp.ready,
+          connecting: mcp.connecting,
+          toolCount: mcp.toolCount,
+          errors: mcpErrors,
+        },
+        rag: {
+          built: rag.built,
+          indexing: rag.indexing,
+          backgroundIndex: rag.backgroundIndex,
+          docs: rag.cache?.docs ?? 0,
+        },
+        scheduler: sch,
+      },
       stream: {
         liveDeltas: config.stream.liveDeltas,
         mockChunkDelayMs: config.stream.mockChunkDelayMs,
@@ -398,6 +727,54 @@ export function createApp(config: RuntimeConfig) {
         watchdogMs: config.stream.watchdogMs,
       },
     });
+  });
+
+  const parseRetentionDays = (raw: unknown, fallback: number): number | null => {
+    if (raw === undefined || raw === null || raw === '') return fallback;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : null;
+  };
+
+  /** 数据保留概览（只读，不删除任何东西）。 */
+  app.get('/api/maintenance', (req, res) => {
+    const days = parseRetentionDays(req.query.days, config.dataRetentionDays);
+    if (days === null) return res.status(400).json({ error: 'days 必须是 1~3650 的整数' });
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+    const candidates = store.pruneRunsOlderThan(cutoff, { dryRun: true });
+    const sizeOf = (p: string): number => {
+      try {
+        return existsSync(p) ? statSync(p).size : 0;
+      } catch {
+        return 0;
+      }
+    };
+    res.json({
+      retentionDays: days,
+      cutoff,
+      candidates,
+      files: {
+        dbBytes: config.sqlitePath === ':memory:' ? 0 : sizeOf(config.sqlitePath),
+        dbWalBytes: config.sqlitePath === ':memory:' ? 0 : sizeOf(`${config.sqlitePath}-wal`),
+        errorLogBytes: sizeOf(config.log.errorLogPath),
+        errorLogBackupBytes: sizeOf(`${config.log.errorLogPath}.1`),
+      },
+      note: '候选只含终态 run，且跳过 awaiting_user、仍有待确认操作、被定时任务引用的记录；删除必须显式 confirm:true。',
+    });
+  });
+
+  /** 手动清理旧 run（数据保留）。默认只算候选；确认后才删。 */
+  app.post('/api/maintenance/prune', (req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (b.confirm !== true) return res.status(400).json({ error: '必须显式带 confirm:true 才能清理数据' });
+    const days = parseRetentionDays(b.olderThanDays, config.dataRetentionDays);
+    if (days === null) return res.status(400).json({ error: 'olderThanDays 必须是 1~3650 的整数' });
+    const limitRaw = b.limit === undefined ? 5000 : Number(b.limit);
+    if (!Number.isInteger(limitRaw) || limitRaw < 1 || limitRaw > 50_000) {
+      return res.status(400).json({ error: 'limit 必须是 1~50000 的整数' });
+    }
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+    const deleted = store.pruneRunsOlderThan(cutoff, { limit: limitRaw });
+    res.json({ ok: true, cutoff, olderThanDays: days, deleted });
   });
 
   /**
@@ -561,13 +938,20 @@ export function createApp(config: RuntimeConfig) {
     let runId: string;
     let resolved: unknown;
     try {
-      // 先在服务端解析预设与参数（含「无 Key 不静默降级」等校验），再入队执行。
-      const bundle = createProvider(config, input);
-      resolved = bundle.resolved;
-      runId = runtime.enqueue(input, bundle.provider);
+      // Codex 直连不走内置 LLM：不解析 Provider（也不因缺 Key 被拦）。
+      if (input.runType === 'codex') {
+        runId = runtime.enqueue(input);
+      } else {
+        // 先在服务端解析预设与参数（含「无 Key 不静默降级」等校验），再入队执行。
+        const bundle = createProvider(config, input);
+        resolved = bundle.resolved;
+        runId = runtime.enqueue(input, bundle.provider);
+      }
     } catch (e) {
       // 例如 createProvider 在校验失败时抛错
-      return res.status(400).json({ error: `创建任务失败: ${(e as Error).message}` });
+      const msg = (e as Error).message;
+      if (msg.startsWith('TOO_MANY_ACTIVE_RUNS')) return res.status(429).json({ error: msg });
+      return res.status(400).json({ error: `创建任务失败: ${msg}` });
     }
     res.status(201).json({
       runId,
@@ -807,6 +1191,38 @@ export function createApp(config: RuntimeConfig) {
   });
 
   /**
+   * 待确认高危操作（定时任务无人值守时暂缓的删除/命令）。
+   * 执行必须显式 confirm:true；删除会复核 baseHash，命令会在宿主执行并回写事件。
+   */
+  app.get('/api/pending-actions', (req, res) => {
+    const statusRaw = typeof req.query.status === 'string' ? req.query.status : '';
+    const status = ['pending', 'executed', 'dismissed', 'failed'].includes(statusRaw)
+      ? (statusRaw as 'pending' | 'executed' | 'dismissed' | 'failed')
+      : undefined;
+    const limit = Number(req.query.limit);
+    const actions = pendingActions.list({
+      status,
+      runId: typeof req.query.runId === 'string' ? req.query.runId : undefined,
+      scheduleId: typeof req.query.scheduleId === 'string' ? req.query.scheduleId : undefined,
+      limit: Number.isFinite(limit) ? limit : 100,
+    });
+    res.json({ count: actions.length, actions });
+  });
+
+  app.post('/api/pending-actions/:id/execute', async (req, res) => {
+    if ((req.body as any)?.confirm !== true) {
+      return res.status(400).json({ error: '必须显式带 confirm:true 才能执行高危操作' });
+    }
+    const r = await pendingActions.execute(req.params.id, { confirm: true });
+    res.status(r.ok ? 200 : 400).json(r);
+  });
+
+  app.post('/api/pending-actions/:id/dismiss', (req, res) => {
+    const r = pendingActions.dismiss(req.params.id);
+    res.status(r.ok ? 200 : 400).json(r);
+  });
+
+  /**
    * 手动 L2 深度验证（终态 run）：异步跑宿主全量测试，状态经 GET 查询。
    * 这是落盘后 hostVerify 的可重复版本——给用户「改完后再确认一次」的入口。
    */
@@ -898,6 +1314,12 @@ export function createApp(config: RuntimeConfig) {
     const id = req.params.id;
     const rec0 = store.getRun(id);
     if (!rec0) return res.status(404).json({ error: '任务不存在' });
+    if (streamState.connections >= config.stream.maxConnections) {
+      res.setHeader('Retry-After', '5');
+      return res.status(429).json({ error: `SSE 连接数已达上限 ${config.stream.maxConnections}，请关闭闲置页面后重试` });
+    }
+    streamState.connections += 1;
+    let counted = true;
 
     const debug = req.query.debug === '1' || config.stream.debug;
     const fromRaw = Number(req.headers['last-event-id'] ?? req.query.fromSeq ?? 0);
@@ -916,6 +1338,8 @@ export function createApp(config: RuntimeConfig) {
     let heartbeats = 0;
     let dedupedFrames = 0;
     let replayCount = 0;
+    let backpressured = false;
+    let drainBound = false;
     const openedAt = Date.now();
     // 提前声明为 no-op，避免 cleanup 在变量初始化前被触发（TDZ）
     let unsubscribe: () => void = () => {};
@@ -929,7 +1353,15 @@ export function createApp(config: RuntimeConfig) {
     const write = (chunk: string): boolean => {
       if (closed) return false;
       try {
-        res.write(chunk);
+        const ok = res.write(chunk);
+        if (!ok) {
+          // 客户端消费慢：先丢弃后续 ephemeral（llm_delta），持久化事件仍按序写。
+          backpressured = true;
+          if (!drainBound) {
+            drainBound = true;
+            res.once('drain', () => { backpressured = false; drainBound = false; });
+          }
+        }
         return true;
       } catch {
         cleanup();
@@ -946,6 +1378,10 @@ export function createApp(config: RuntimeConfig) {
     const cleanup = () => {
       if (closed) return;
       closed = true;
+      if (counted) {
+        counted = false;
+        streamState.connections = Math.max(0, streamState.connections - 1);
+      }
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (watchdogTimer) clearInterval(watchdogTimer);
       unsubscribe();
@@ -979,6 +1415,10 @@ export function createApp(config: RuntimeConfig) {
           }
           lastSeq = e.seq;
         }
+      }
+      if (e.ephemeral && backpressured) {
+        streamState.droppedEphemeral += 1;
+        return;
       }
       frames += 1;
       write(toFrame(e as unknown as Record<string, unknown>));
@@ -1057,6 +1497,9 @@ export function createApp(config: RuntimeConfig) {
       heartbeatMs: config.stream.heartbeatMs,
       watchdogMs: config.stream.watchdogMs,
       activeStreams: hub.activeRuns(),
+      connections: streamState.connections,
+      maxConnections: config.stream.maxConnections,
+      droppedEphemeral: streamState.droppedEphemeral,
       ephemeralEvents: logger.ephemeralTotal(),
       pendingPersistence: logger.pendingCount(),
       uptimeSec: Math.round(process.uptime()),
@@ -1093,6 +1536,12 @@ export function createApp(config: RuntimeConfig) {
    * 让「前端静默失效」也能被服务端记录（否则 UI 不更新时无从查起）。
    */
   app.post('/api/client-errors', (req, res) => {
+    const key = req.ip || req.socket.remoteAddress || 'unknown';
+    const decision = clientErrorLimiter.take(key);
+    if (!decision.allowed) {
+      res.setHeader('Retry-After', String(decision.retryAfterSec));
+      return res.status(429).json({ error: '客户端错误上报过于频繁，请稍后重试' });
+    }
     const b = (req.body ?? {}) as Record<string, unknown>;
     const s = (k: string, max = 2000) => (typeof b[k] === 'string' ? (b[k] as string).slice(0, max) : undefined);
     const report = errors.report({
@@ -1319,6 +1768,11 @@ export function createApp(config: RuntimeConfig) {
     res.json(knowledge.ragStats());
   });
 
+  /** RAG 索引运行状态：是否构建过、是否正在刷新、持久化层规模、是否开启后台补算 */
+  app.get('/api/rag/status', (_req, res) => {
+    res.json(knowledge.ragStatus());
+  });
+
   /** 重建切块级 RAG 索引：?indexKind=flat|hnsw|ivf&chunkSize=512&overlap=64 */
   app.post('/api/rag/rebuild', async (req, res) => {
     const indexKind = req.body?.indexKind ?? req.query.indexKind;
@@ -1352,7 +1806,7 @@ export function createApp(config: RuntimeConfig) {
       | 'hybrid_weighted'
       | 'hybrid_rerank';
     const k = Math.max(1, Math.min(50, Number(req.query.k ?? 5) || 5));
-    const collection = str(req.query.collection);
+    const collection = str(req.query.collection) || undefined;
     try {
       const result = await knowledge.searchRag(q, {
         mode,
@@ -1407,70 +1861,129 @@ export function createApp(config: RuntimeConfig) {
   });
 
   /**
-   * 知识库检索（关键词 / 语义 / 混合）：
-   *   ?q=不安全的常量&mode=keyword   → FTS5 关键词
-   *   ?q=不安全的常量&mode=semantic  → 向量近邻（sqlite-vec kNN；不可用降级 FTS5 候选+重排）
-   *   ?q=不安全的常量&mode=hybrid    → 两者并集去重，标注 matchedBy
+   * 知识库检索（关键词 / 语义 / 混合）——三种 mode 都走同一条切块级 RAG 管线：
+   *   ?q=不安全的常量&mode=keyword   → BM25
+   *   ?q=不安全的常量&mode=semantic  → 向量近邻（Flat/HNSW/IVF）
+   *   ?q=不安全的常量&mode=hybrid    → BM25 + 向量 → RRF → rerank
+   * 可选 `collection` 下推元数据过滤；响应按文档去重，附 matchedBy / chunkId / 耗时。
    */
-  app.get('/api/knowledge/search', (req, res) => {
+  app.get('/api/knowledge/search', async (req, res) => {
     const q = str(req.query.q);
     if (!q) return res.status(400).json({ error: '缺少 q 检索词' });
     const mode = (req.query.mode === 'semantic' || req.query.mode === 'hybrid' ? req.query.mode : 'keyword') as 'keyword' | 'semantic' | 'hybrid';
     const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 20) || 20));
-    if (mode === 'semantic') {
-      return res.json({ mode, count: 0, hits: knowledge.searchSemantic(q, { limit }) });
+    const collection = str(req.query.collection) || undefined;
+    try {
+      const result = await knowledge.searchKnowledge(q, { mode, limit, collection });
+      const base = {
+        mode,
+        engine: 'rag',
+        ragMode: result.ragMode,
+        collection: result.collection,
+        count: result.count,
+        latencyMs: result.latencyMs,
+        timings: result.timings,
+      };
+      // keyword 的历史响应字段是 items；semantic/hybrid 是 hits。两者都保留，避免破坏调用方。
+      return mode === 'keyword'
+        ? res.json({ ...base, items: result.hits })
+        : res.json({ ...base, hits: result.hits });
+    } catch (e) {
+      return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
     }
-    if (mode === 'hybrid') {
-      return res.json({ mode, count: 0, hits: knowledge.searchHybrid(q, { limit }) });
-    }
-    return res.json({ mode, count: 0, items: knowledge.searchData(q, { limit }) });
   });
 
-  return { app, store, runtime, registry, errors, knowledge, verification, recovery, mcp, mcpRuntime };
+  // -------------------------------------------------------------------------
+  // 定时任务（进程内调度；只在 src/index.ts 启动）
+  // -------------------------------------------------------------------------
+  app.get('/api/schedules', (_req, res) => {
+    const items = store.listSchedules().map((s) => {
+      const last = s.lastRunId ? store.getRun(s.lastRunId) : null;
+      const pendingCount = pendingActions.list({ status: 'pending', scheduleId: s.id, limit: 500 }).length;
+      return {
+        ...s,
+        lastRun: last
+          ? {
+              runId: last.runId,
+              status: last.status,
+              createdAt: last.createdAt,
+              finalAnswer: last.finalAnswer?.slice(0, 200),
+              failureReason: last.failureReason?.slice(0, 200),
+            }
+          : null,
+        pendingCount,
+      };
+    });
+    res.json({ count: items.length, schedules: items });
+  });
+
+  app.post('/api/schedules', (req, res) => {
+    const v = parseScheduleRequest((req.body ?? {}) as Record<string, unknown>, config, null);
+    if (v.error || !v.record) return res.status(400).json({ error: v.error ?? '请求无效' });
+    store.saveSchedule(v.record);
+    res.status(201).json({ schedule: v.record });
+  });
+
+  app.patch('/api/schedules/:id', (req, res) => {
+    const existing = store.getSchedule(req.params.id);
+    if (!existing) return res.status(404).json({ error: '定时任务不存在' });
+    const v = parseScheduleRequest((req.body ?? {}) as Record<string, unknown>, config, existing);
+    if (v.error || !v.record) return res.status(400).json({ error: v.error ?? '请求无效' });
+    store.saveSchedule(v.record);
+    res.json({ schedule: v.record });
+  });
+
+  app.delete('/api/schedules/:id', (req, res) => {
+    const existing = store.getSchedule(req.params.id);
+    if (!existing) return res.status(404).json({ error: '定时任务不存在' });
+    store.deleteSchedule(req.params.id);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/schedules/:id/run-now', (req, res) => {
+    if (!store.getSchedule(req.params.id)) return res.status(404).json({ error: '定时任务不存在' });
+    const r = scheduler.runNow(req.params.id);
+    const status = r.ok ? 201 : r.error?.startsWith('overlap_skipped') ? 409 : 400;
+    res.status(status).json(r);
+  });
+
+  app.get('/api/schedules/:id/runs', (req, res) => {
+    if (!store.getSchedule(req.params.id)) return res.status(404).json({ error: '定时任务不存在' });
+    const runs = store.listRunsBySchedule(req.params.id, 20).map((r) => recordToResult(r));
+    res.json({ count: runs.length, runs });
+  });
+
+  return { app, store, runtime, registry, errors, knowledge, verification, recovery, mcp, mcpRuntime, scheduler, pendingActions, logger };
 }
 
-interface ParsedRunLimits {
-  values: {
-    maxSteps?: number;
-    maxModelCalls?: number;
-    maxToolCalls?: number;
-    totalTimeoutMs?: number;
-    tokenBudget?: number;
-    costBudgetUsd?: number;
-  };
-  error?: string;
+/** 常量时间比较，避免 token 通过响应时间被逐字符试探。 */
+export function tokenMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(String(provided));
+  const b = Buffer.from(String(expected));
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
-/**
- * 运行预算必须是正整数（金额为正数）。0/负数/非数字直接 400，
- * 不能依赖 `??` 落回默认值——否则 tokenBudget=0 会变成“无上限”。
- */
-export function parseRunLimits(body: Record<string, unknown>): ParsedRunLimits {
-  const values: ParsedRunLimits['values'] = {};
-  const intFields: Array<[keyof ParsedRunLimits['values'], unknown, number, number]> = [
-    ['maxSteps', body.maxSteps, 1, 200],
-    ['maxModelCalls', body.maxModelCalls, 1, 200],
-    ['maxToolCalls', body.maxToolCalls, 1, 500],
-    ['totalTimeoutMs', body.totalTimeoutMs, 1000, 3_600_000],
-    ['tokenBudget', body.tokenBudget, 1, 100_000_000],
-  ];
-  for (const [name, raw, min, max] of intFields) {
-    if (raw === undefined || raw === null || raw === '') continue;
-    const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
-    if (!Number.isFinite(n) || !Number.isInteger(n) || n < min || n > max) {
-      return { values, error: `${name} 必须是 ${min}~${max} 的整数` };
+function bearerToken(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  const m = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return m?.[1]?.trim() || undefined;
+}
+
+function cookieValue(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== name) continue;
+    const raw = part.slice(eq + 1).trim();
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
     }
-    values[name] = n;
   }
-  const costRaw = body.costBudgetUsd;
-  if (costRaw !== undefined && costRaw !== null && costRaw !== '') {
-    const n = typeof costRaw === 'number' ? costRaw : typeof costRaw === 'string' ? Number(costRaw) : NaN;
-    if (!Number.isFinite(n) || n <= 0 || n > 1000) {
-      return { values, error: 'costBudgetUsd 必须是 (0, 1000] 的正数' };
-    }
-    values.costBudgetUsd = n;
-  }
-  return { values };
+  return undefined;
 }
 
 function num(v: unknown, def?: number): number | undefined {

@@ -281,15 +281,25 @@ export class OpenAICompatibleEmbedder implements AsyncEmbedder {
         encoding_format: 'float',
       };
       if (this.opts.dimensions) body.dimensions = this.opts.dimensions;
-      const res = await this.fetchImpl(`${this.baseUrl}/embeddings`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${this.opts.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      });
+      let res: Response;
+      try {
+        res = await this.fetchImpl(`${this.baseUrl}/embeddings`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${this.opts.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: ctrl.signal,
+        });
+      } catch (e) {
+        // 把「连不上」与「服务返回错误」分开：前者几乎总是服务没起/地址写错
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(
+          `embedding 连接失败（${this.baseUrl}/embeddings）：${msg}；` +
+            `检查 embedding 服务是否在运行（本机 Ollama：\`ollama serve\`），或核对 MTA_EMBEDDING_BASE_URL`,
+        );
+      }
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
         const err = new Error(`embedding HTTP ${res.status}: ${detail.slice(0, 300)}`);

@@ -84,6 +84,8 @@ export class FlatIndex implements VectorIndex {
   }
 
   search(query: Float32Array, opts: VectorSearchOptions): VectorSearchResult[] {
+    // 空索引没有维度可校验：直接返回空，避免「删空知识库后查询」抛维度错误。
+    if (!this.records.length) return [];
     const q = l2Normalize(Float32Array.from(query));
     if (q.length !== this.dim) throw new Error(`FlatIndex 查询维度不一致：${q.length} vs ${this.dim}`);
     const k = clampK(opts.k);

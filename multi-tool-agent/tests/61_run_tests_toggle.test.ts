@@ -73,5 +73,5 @@ test('61e) 前端有开关，并且提交时按 codebase 类型透传', () => {
   const html = readFileSync('public/index.html', 'utf8');
   assert.ok(html.includes('id="allowRunTests"'), '缺少「允许运行测试」开关');
   assert.ok(html.includes("body.allowRunTests = $('allowRunTests').checked"), '提交载荷未透传 allowRunTests');
-  assert.ok(html.includes("$('runTestsWrap').classList.toggle('hide', t === 'misc')"), '杂项任务应隐藏该开关');
+  assert.ok(html.includes("$('runTestsWrap').classList.toggle('hide', t === 'misc' || t === 'codex')"), '杂项/Codex 任务应隐藏该开关');
 });

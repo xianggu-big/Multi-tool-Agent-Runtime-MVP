@@ -3,7 +3,7 @@
 
 # 参数台账（自动生成）
 
-> 生成时间：**2026-10-23 05:52:16**（本机时区）· 来源：代码默认值 + 当前「.env」/环境变量
+> 生成时间：**2026-10-24 09:33:31**（本机时区）· 来源：代码默认值 + 当前「.env」/环境变量
 > 说明：这是**当前生效值**的快照。`.env` 一改，重新生成即可看到差异；历史变化请看 `reports/CHANGELOG.md` 的「参数变更」章节。
 
 ## 1. LLM 接入
@@ -89,6 +89,7 @@
 | `code-audit` | 12 | 12 | 24 | 120000 | 150000 | `search_files` `list_files` `read_file` `submit_finding` | `codebase:read` `agent:report` |
 | `doc-research` | 8 | 10 | 16 | 80000 | 120000 | `web_search` `fetch_page` `extract_evidence` `knowledge_search` `submit_finding` | `research:web` `research:read` `knowledge:read` `agent:report` |
 | `code-edit` | 12 | 12 | 24 | 120000 | 600000 | `search_files` `read_file` `list_files` `run_tests` `create_file` `edit_file` `delete_file` `copy_path` `run_command` `submit_changes` `submit_finding` | `codebase:read` `codebase:test` `codebase:write` `agent:report` |
+| `codex-code` | 6 | 6 | 8 | 60000 | 900000 | `codex_exec` `submit_finding` | `codex:exec` `agent:report` |
 
 ### 2.5 写能力 / Docker 沙箱 / 人工审批（M1/M1'：默认可用；写操作需本 run 显式授权 + 审批）
 
@@ -133,6 +134,7 @@
 | `delegate_subtasks` | `orchestrator:delegate` | orchestrator（主） |
 | `submit_orchestration` | `orchestrator:report` | orchestrator（主） |
 | `ask_user` | `agent:ask` | — |
+| `codex_exec` | `codex:exec` | — |
 | `create_file` | `codebase:write` | — |
 | `edit_file` | `codebase:write` | — |
 | `delete_file` | `codebase:write` | — |
@@ -140,7 +142,7 @@
 | `run_command` | `codebase:write` | — |
 | `submit_changes` | `codebase:write` | — |
 
-> 已注册工具总数：21；上表由 `TOOL_PERMISSION`（权限唯一事实来源）生成。
+> 已注册工具总数：22；上表由 `TOOL_PERMISSION`（权限唯一事实来源）生成。
 
 ## 5. 错误报告与日志
 

@@ -60,10 +60,9 @@
 ### 3.1 现状（已存在，本轮接线补齐）
 
 - `Repository`：`data_items`（collection/itemId/type/tags/content）+ FTS5 关键词检索。
-- `VectorRecall`：`data_vec`（sqlite-vec `vec0` 虚表，256 维，余弦 kNN）；`putData` 后自动 `upsert` 嵌入。
-  - 嵌入器默认为零依赖 `HashEmbedder`（词/字符 n-gram 哈希，**确定性、捕获词法重叠**，非真语义）。
-  - 不可用时降级为「FTS5 候选 + 内存余弦重排」。
-- `KnowledgeHub`：`searchData`（关键词）/ `searchSemantic`（向量）/ `searchHybrid`（并集去重 + `matchedBy`）。
+- **2026-10-24 更新**：双轨已统一为切块级 RAG；唯一向量存储是 `rag_chunks`，`data_vec` 停写。
+- `KnowledgeHub`：`searchKnowledge`（keyword/semantic/hybrid 同管线）/ `searchSemantic` / `searchHybrid`（兼容包装）；文档级去重 + `matchedBy`。
+- 嵌入器默认零依赖 `HashEmbedder`（离线兜底）；配置 `MTA_EMBEDDING_MODEL` 后自动使用真实 embedding。
 
 ### 3.2 本轮新增（已实现）
 
@@ -73,11 +72,11 @@
 
 ### 3.3 真实语义嵌入升级路径（方案）
 
-`HashEmbedder` 是词法兜底；要「真语义」注入实现 `Embedder` 的替代实现即可（`VectorRecall` 不感知）：
+`HashEmbedder` 是词法兜底；要「真语义」配置 `MTA_EMBEDDING_MODEL` 即可（切块级 RAG 自动重建索引）：
 
 1. **OpenAI 兼容 embeddings**：`new OpenAIEmbedder({ baseUrl, model: 'text-embedding-3-small', apiKey })` → 调 `/embeddings`，dim 1536。适合已用 DeepSeek/OpenAI 键的场景。
 2. **本地零外呼**：`@xenova/transformers` 的 `Xenova/all-MiniLM-L6-v2`（dim 384，本地推理，无 API 成本，适合离线/隐私）。
-3. 切换点：`buildRuntime` 里 `new KnowledgeHub(store.database, tracer, errors, { embedder: realEmbedder })`；旧向量需重建（`scripts/ingest-knowledge.ts` 重跑即覆盖）。
+3. 切换点：`.env` 设置 `MTA_EMBEDDING_MODEL` + `MTA_EMBEDDING_BASE_URL` + Key；模型/维度/切块指纹变化时 `rebuildRag` 自动整库重算。
 
 ### 3.4 涉及功能点（方案）
 
@@ -122,4 +121,4 @@
 - 前端脚本 `node --check` 通过；`tsc --noEmit` 0 错误。
 - 全量测试 **193/193 通过**。
 - 语义检索实测：`「打包器对比」→「比较两个打包器」`、`「代码改进方案」→ 代码分析运行`（hybrid，matchedBy=semantic）。
-- 回填实测：180 条 runs 入库、180 个向量（sqlite-vec 可用，embedder=hash-ngram）。
+- 回填实测（2026-10-13 当时口径）：180 条 runs 入库、180 个向量（旧 sqlite-vec 轨；现已停写）。

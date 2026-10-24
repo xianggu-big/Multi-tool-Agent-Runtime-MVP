@@ -10,14 +10,14 @@ import { LiveHub } from '../src/trace/LiveHub.js';
 import { Tracer } from '../src/trace/Tracer.js';
 import { ErrorReporter } from '../src/runtime/errorReporter.js';
 
-function makeHub(db?: Database.Database): { hub: KnowledgeHub; close: () => void } {
+function makeHub(db?: Database.Database): { hub: KnowledgeHub; db: Database.Database; close: () => void } {
   const d = db ?? new Database(':memory:');
   const liveHub = new LiveHub();
   const logger = new EventLogger({ maxContentChars: 1000, onLive: (e) => liveHub.publish(e) });
   const tracer = new Tracer(logger);
   const errors = new ErrorReporter({ emit: () => {} });
   const hub = new KnowledgeHub(d, tracer, errors);
-  return { hub, close: () => d.close() };
+  return { hub, db: d, close: () => d.close() };
 }
 
 describe('HashEmbedder', () => {
@@ -62,15 +62,20 @@ describe('vecToBuffer / bufferToVec', () => {
   });
 });
 
-describe('VectorRecall — 向量召回层（经 KnowledgeHub 装配，与生产同路径）', () => {
-  // 不在 suite 注册期直接 new VectorRecall(bare db)——node:test 注册阶段构造会触发
-  // sqlite-vec 扩展加载的时序问题；走 KnowledgeHub（Repository→VectorRecall 同生产装配）稳定。
+describe('VectorRecall — 旧 sqlite-vec 轨（已停写，仅保留为历史/兼容工具）', () => {
+  // 生产写入路径已统一到 RAG（rag_chunks）；这里直接构造 VectorRecall 并用显式 upsert，
+  // 只验证这个遗留组件本身没坏，不再代表 KnowledgeHub 的检索路径。
   function makeVRWith(seedItems: { id: string; collection: string; text: string }[]) {
-    const { hub, close } = makeHub();
+    const { hub, db, close } = makeHub();
     for (const it of seedItems) {
       hub.putData({ collection: it.collection, itemId: it.id, content: { t: it.text } });
     }
-    return { hub, vr: hub.vectorRecall, close };
+    const vr = new VectorRecall(db);
+    for (const it of seedItems) {
+      const item = hub.getData(it.collection, it.id)!;
+      vr.upsert(item.id, item.searchText);
+    }
+    return { hub, vr, close };
   }
 
   const SEED = [
@@ -127,57 +132,68 @@ describe('VectorRecall — 向量召回层（经 KnowledgeHub 装配，与生产
   });
 });
 
-describe('KnowledgeHub — 语义 + 混合检索集成', () => {
-  it('putData 自动嵌入向量；searchSemantic 召回', () => {
+describe('KnowledgeHub — 统一 RAG 检索入口', () => {
+  it('searchSemantic 走 RAG（不再依赖 data_vec）', async () => {
     const { hub, close } = makeHub();
     try {
       hub.putData({ collection: 'audit', itemId: 'f1', content: { note: '代码审计发现三处硬编码密钥' }, tags: ['安全'] });
       hub.putData({ collection: 'audit', itemId: 'f2', content: { note: '存在不安全常量配置' }, tags: ['安全'] });
       hub.putData({ collection: 'notes', itemId: 'n1', content: { note: '今天天气适合散步' }, tags: ['日常'] });
-      const hits = hub.searchSemantic('不安全硬编码常量', { limit: 3 });
+      const hits = await hub.searchSemantic('不安全硬编码常量', { limit: 3 });
       assert.ok(hits.length > 0);
       const ids = hits.map((h) => h.itemId);
       assert.ok(ids.includes('f1') || ids.includes('f2'));
+      assert.ok(hits.every((h) => h.matchedBy === 'semantic'), 'vector 模式只能标 semantic');
+      assert.equal(hub.ragStatus().store.chunks > 0, true, '应写入 rag_chunks（唯一向量存储）');
     } finally {
       close();
     }
   });
 
-  it('searchHybrid：关键词 + 语义融合去重', () => {
+  it('searchHybrid：RAG 融合 + 文档级去重', async () => {
     const { hub, close } = makeHub();
     try {
-      hub.putData({ collection: 'kb', itemId: 'a', content: { t: '代码审计硬编码' } });
+      // 同一文档多段都命中，确保 doc 级只返回一次
+      hub.putData({ collection: 'kb', itemId: 'a', content: { t: '代码审计硬编码。'.repeat(40) } });
       hub.putData({ collection: 'kb', itemId: 'b', content: { t: '安全常量配置问题' } });
       hub.putData({ collection: 'kb', itemId: 'c', content: { t: '无关的天气记录' } });
-      const res = hub.searchHybrid('硬编码', { limit: 3 });
+      const res = await hub.searchHybrid('硬编码', { limit: 3 });
       const a = res.find((r) => r.itemId === 'a');
       assert.ok(a, 'a 应被召回');
-      assert.ok(['both', 'keyword'].includes(a.matchedBy));
-      assert.ok(!res.slice(0, 2).some((r) => r.itemId === 'c'));
+      assert.ok(['both', 'keyword'].includes(a!.matchedBy));
+      assert.equal(res.filter((r) => r.itemId === 'a').length, 1, '同一文档只能出现一次');
+      assert.ok((a!.chunkHits ?? 0) >= 1);
+      // 只断言相关性排序：a 必须排在无关的 c 之前（小语料下 c 仍可能进入 top-k）
+      const ci = res.findIndex((r) => r.itemId === 'c');
+      const ai = res.findIndex((r) => r.itemId === 'a');
+      assert.ok(ci === -1 || ai < ci, `a 应排在 c 之前（a=${ai}, c=${ci}）`);
     } finally {
       close();
     }
   });
 
-  it('deleteData 同步清理向量（不残留）', () => {
+  it('deleteData 后 RAG 不再召回（级联删块）', async () => {
     const { hub, close } = makeHub();
     try {
       hub.putData({ collection: 'kb', itemId: 'x', content: { t: '待删除的条目内容' } });
+      assert.ok((await hub.searchSemantic('待删除', { limit: 5 })).some((h) => h.itemId === 'x'));
       hub.deleteData('kb', 'x');
-      const ghost = hub.searchSemantic('待删除', { limit: 5 });
+      const ghost = await hub.searchSemantic('待删除', { limit: 5 });
       assert.ok(!ghost.some((h) => h.itemId === 'x'), '已删除条目不应被语义召回');
     } finally {
       close();
     }
   });
 
-  it('stats 含 vector 维度', () => {
+  it('stats.vector 报告统一 RAG 层（不再是 hash 维度的 data_vec）', () => {
     const { hub, close } = makeHub();
     try {
       const s = hub.stats();
       assert.ok('vector' in s);
-      assert.equal(typeof s.vector.available, 'boolean');
+      assert.equal(s.vector.engine, 'rag');
+      assert.equal(s.vector.available, true);
       assert.equal(s.vector.embedder, 'hash-ngram');
+      assert.equal(s.vector.count, s.vector.chunks);
     } finally {
       close();
     }

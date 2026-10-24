@@ -39,6 +39,8 @@ export interface RagBuildOptions {
   indexKind?: VectorIndexKind;
   hnsw?: HnswOptions;
   ivf?: IvfOptions;
+  /** 自定义 reranker（默认 LexicalReranker）；cross-encoder 需异步实现 */
+  reranker?: Reranker;
 }
 
 export type RagSearchMode = 'keyword' | 'vector' | 'hybrid' | 'hybrid_weighted' | 'hybrid_rerank';
@@ -117,6 +119,21 @@ export class RagPipeline {
     const embedder = opts.embedder ?? createHashAsyncEmbedder();
     const chunks = docs.flatMap((d) => chunkDocument(d, opts.chunk));
     const vectors = chunks.length ? await embedder.embed(chunks.map((c) => c.embedText)) : [];
+    return RagPipeline.fromChunks(chunks, vectors, { ...opts, embedder }, docs);
+  }
+
+  /**
+   * 从「已有的 chunk + 向量」重建管线——**不调用 embedding**。
+   * 供持久化索引用：重启后从 rag_chunks 读回数据，几毫秒重建内存 BM25 + FlatIndex。
+   * docs 省略时按 chunk.docId 去重推导（仅用于 stats().docs）。
+   */
+  static fromChunks(
+    chunks: Chunk[],
+    vectors: Float32Array[],
+    opts: RagBuildOptions = {},
+    docs?: RagDoc[],
+  ): RagPipeline {
+    const embedder = opts.embedder ?? createHashAsyncEmbedder();
     if (vectors.length !== chunks.length) {
       throw new Error(`RagPipeline: embedding 条数不符（${vectors.length} vs ${chunks.length}）`);
     }
@@ -142,7 +159,9 @@ export class RagPipeline {
         metadata: c.metadata,
       })),
     );
-    return new RagPipeline(chunks, docs, embedder, index, keyword);
+    const derivedDocs: RagDoc[] =
+      docs ?? [...new Set(chunks.map((c) => c.docId))].map((id) => ({ id, text: '' }));
+    return new RagPipeline(chunks, derivedDocs, embedder, index, keyword, opts.reranker);
   }
 
   async search(query: string, opts: RagSearchOptions = {}): Promise<RagSearchResult> {
@@ -151,7 +170,9 @@ export class RagPipeline {
     const k = Math.max(1, Math.min(200, Math.floor(opts.k ?? 5)));
     const started = Date.now();
     const timings = { embedMs: 0, keywordMs: 0, vectorMs: 0, fusionMs: 0, rerankMs: 0 };
-    if (!q) return { query: q, mode, k, totalChunks: this.chunks.length, results: [], latencyMs: 0, timings };
+    if (!q || !this.chunks.length) {
+      return { query: q, mode, k, totalChunks: this.chunks.length, results: [], latencyMs: Date.now() - started, timings };
+    }
 
     const pool = Math.max(k, Math.min(this.chunks.length, Math.floor(opts.candidatePool ?? Math.max(k * 4, 20))));
     let keywordHits: RankedItem[] = [];
@@ -218,7 +239,7 @@ export class RagPipeline {
             fused: f,
           }];
         });
-        const reranked = this.reranker.rerank(
+        const reranked = await this.reranker.rerank(
           q,
           candidates.map(({ fused, ...c }) => c),
           k,

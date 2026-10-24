@@ -11,7 +11,7 @@
 //      以及返回值（调用方可直接回给用户/模型）；
 //   ③ 纯函数 `parseErrorLocation()`：从栈里提取第一处「项目内」代码位置。
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { TraceEventType } from '../types.js';
@@ -146,6 +146,8 @@ export interface ErrorReporterOptions {
   emit?: (runId: string, type: TraceEventType, data: Record<string, unknown>) => void;
   /** 是否把报告打到控制台（默认 true，便于开发时直接看到） */
   console?: boolean;
+  /** errors.log 单文件上限（字节）；超过后轮转为 `<logPath>.1`（0/未设 = 不轮转） */
+  maxLogBytes?: number;
 }
 
 export class ErrorReporter {
@@ -204,6 +206,7 @@ export class ErrorReporter {
     if (this.opts.logPath) {
       try {
         mkdirSync(dirname(this.opts.logPath), { recursive: true });
+        this.rotateIfNeeded();
         appendFileSync(this.opts.logPath, JSON.stringify(report) + '\n', 'utf8');
       } catch {
         /* 日志写失败不得影响主流程 */
@@ -223,6 +226,17 @@ export class ErrorReporter {
       );
     }
     return report;
+  }
+
+  /** 单文件轮转：只保留一份 .1 备份，避免长期运行把磁盘写满。 */
+  private rotateIfNeeded(): void {
+    const max = this.opts.maxLogBytes ?? 0;
+    if (!this.opts.logPath || max <= 0 || !existsSync(this.opts.logPath)) return;
+    const size = statSync(this.opts.logPath).size;
+    if (size < max) return;
+    const backup = `${this.opts.logPath}.1`;
+    rmSync(backup, { force: true });
+    renameSync(this.opts.logPath, backup);
   }
 
   /** 最近报告（可按 runId / source / code 过滤） */

@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/mta/eval/harness/result.schema.json",
+  "title": "Agent Harness Evaluation Attempt Result",
+  "description": "One attempt (one task, one repetition) of an Agent Harness evaluation. Aggregate scorecards must be derived from these files; do not type scores by hand.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "taskId",
+    "taskVersion",
+    "runId",
+    "track",
+    "attempt",
+    "startedAt",
+    "finishedAt",
+    "outcome",
+    "success",
+    "checks",
+    "usage",
+    "timings",
+    "failures",
+    "artifacts"
+  ],
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "taskVersion": { "type": "string", "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$" },
+    "runId": { "type": "string", "minLength": 1 },
+    "track": { "type": "string", "enum": ["deterministic", "real"] },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "outcome": {
+      "type": "string",
+      "enum": ["completed", "awaiting_user", "failed", "limit_reached", "cancelled"]
+    },
+    "expectedOutcome": {
+      "type": "string",
+      "enum": ["completed", "awaiting_user", "failed", "limit_reached", "cancelled"]
+    },
+    "success": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "usage": { "$ref": "#/$defs/usage" },
+    "timings": { "$ref": "#/$defs/timings" },
+    "failures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/failure" }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "model": { "$ref": "#/$defs/model" },
+    "harness": { "$ref": "#/$defs/harness" },
+    "notes": { "type": "string" },
+    "extensions": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "skipped", "error"]
+        },
+        "detail": { "type": "string" },
+        "expected": {},
+        "actual": {},
+        "evidence": { "type": "string" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens", "totalTokens", "costUsd", "modelCalls", "toolCalls"],
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "costUsd": { "type": "number", "minimum": 0 },
+        "modelCalls": { "type": "integer", "minimum": 0 },
+        "toolCalls": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallMs"],
+      "properties": {
+        "wallMs": { "type": "number", "minimum": 0 },
+        "modelMs": { "type": "number", "minimum": 0 },
+        "toolMs": { "type": "number", "minimum": 0 },
+        "queueMs": { "type": "number", "minimum": 0 },
+        "ttftMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "message"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["provider", "tool", "runtime", "approval", "verification", "safety", "task", "environment", "unknown"]
+        },
+        "code": { "type": "string" },
+        "message": { "type": "string", "minLength": 1 },
+        "recoverable": { "type": "boolean" },
+        "evidence": { "type": "string" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "kind": { "type": "string" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "name"],
+      "properties": {
+        "provider": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "params": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit"],
+      "properties": {
+        "commit": { "type": "string" },
+        "version": { "type": "string" },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

@@ -722,7 +722,7 @@ test('32g2) 回归守卫：misc 任务的 maxSteps 请求只能收紧不能放�
   bundle.store.close();
 });
 
-test('32g3) 回归守卫：FTS5 原生检索生效（AND 语义）；vec0 kNN 生效', () => {
+test('32g3) 回归守卫：FTS5 原生检索生效（AND 语义）；语义检索走统一 RAG', async () => {
   // 修复后：FTS SQL 带 `MATCH ?` 且占位符数量对齐 → 原生检索生效，不再静默降级 LIKE。
   // 修复前：repository.ts 的 FTS SQL 缺 `MATCH ?` 且传参（ftsQuery, limit）多于占位符
   //       （collection? + LIMIT?）→ better-sqlite3 恒抛 RangeError → catch 后静默降级 LIKE。
@@ -751,17 +751,16 @@ test('32g3) 回归守卫：FTS5 原生检索生效（AND 语义）；vec0 kNN �
     assert.equal(hits.length, 1, '回归守卫：FTS5 原生 AND 语义命中 1 条（不再静默降级 LIKE）');
     // 单子串查询同样命中（foo-bar 拆词后仍在 FTS 索引内，或经 LIKE 兜底命中）
     assert.equal(bundle.knowledge.searchData('foo-bar').length, 1);
-    // vec0 侧：原生 kNN 生效；语义召回命中与查询共享 token 的条目
-    const sem = bundle.knowledge.searchSemantic('foo bar 组合');
-    assert.ok(sem.length > 0, '回归守卫：vec0 kNN 应召回结果');
+    // 语义侧：统一 RAG 管线召回与查询共享 token 的条目（不再写 data_vec）
+    const sem = await bundle.knowledge.searchSemantic('foo bar 组合');
+    assert.ok(sem.length > 0, '回归守卫：RAG 向量模式应召回结果');
     assert.equal(sem[0].itemId, 'n1', '语义召回应把共享 token 的 n1 排在首位');
-    // 原生路径钉死：仅「返回了结果」区分不了原生检索与兜底（LIKE / 内存余弦）——
-    // 显式确认 FTS5 虚表在位；vec0 在位时确认向量已真实入库，并把实测值打进输出供审计。
-    // （vec0 不可用时降级是设计允许的行为，见 vectorRecall 文档；这里只确保不「假装在测原生」。）
+    // 原生 FTS5 仍供低层 `searchData` 使用；语义检索的唯一存储是 rag_chunks。
     assert.equal(bundle.knowledge.repository.stats().fts, true, 'FTS5 虚表应真实可用（fts=true）');
-    const vs = bundle.knowledge.vectorRecall.stats();
-    console.log(`[g3] vec0 available=${vs.available} vectors=${vs.count}`);
-    if (vs.available) assert.ok(vs.count >= 2, `vec0 表应有已入库向量（实际 ${vs.count}）`);
+    const vs = bundle.knowledge.stats().vector;
+    console.log(`[g3] rag chunks=${vs.chunks} embedder=${vs.embedder}`);
+    assert.equal(vs.engine, 'rag', '向量统计应来自统一 RAG 层');
+    assert.ok(vs.chunks >= 2, `rag_chunks 应有已入库向量（实际 ${vs.chunks}）`);
     assert.equal(bundle.knowledge.searchData('漏洞').length, 0); // 库里没有，正对照
   } finally {
     bundle.store.close();

@@ -220,6 +220,31 @@ export const SUB_AGENT_SPECS: SubAgentSpec[] = [
       '给 src/tools/codebase/searchFiles.ts 增加 path 作用域参数并跑类型检查',
     ],
   },
+  {
+    id: 'codex-code',
+    title: '本机 Codex 代码子 Agent（外部 CLI）',
+    responsibilities:
+      '把一个具体的查代码/改代码任务交给本机 Codex CLI：通过 codex_exec 执行（默认只读分析；本 run 显式授权写能力时在沙箱副本上修改），' +
+      '再把结果与证据通过 submit_finding 上报。Codex 的改动不会直接生效：写入由运行时统一走检查阶梯与人工审批后落盘。',
+    notDo: [
+      '绕过 codex_exec 直接改文件（本 spec 没有写工具）',
+      '在未获得写授权时要求 write 模式（会被 WRITE_DISABLED 拒绝）',
+      '把 Codex 的自述当成已验证事实（未落盘/未验证时如实说明）',
+      '对同一任务反复调用 codex_exec 重试（预算有限，失败应上报 unresolved）',
+    ],
+    tools: ['codex_exec', 'submit_finding'],
+    permissions: ['codex:exec', 'agent:report'],
+    budget: { maxSteps: 6, maxModelCalls: 6, maxToolCalls: 8, tokenBudget: 60000, totalTimeoutMs: 900000 },
+    maxRiskLevel: 'high',
+    retention: { importance: 'ephemeral' },
+    modelParams: { temperature: 0, thinking: 'enabled', reasoningEffort: 'low', maxTokens: 8192 },
+    requiredInputs: ['objective'],
+    escalateTo: ['codebase', 'orchestrator', 'human'],
+    examples: [
+      '让 Codex 检查 src/runtime 下错误处理的一致性，返回文件:行号',
+      '（本 run 已授权写）让 Codex 修复 add() 的边界问题并补测试，改完走审批',
+    ],
+  },
 ];
 
 export function getSpec(id: string): SubAgentSpec | undefined {

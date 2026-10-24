@@ -48,6 +48,12 @@ export interface SubAgentRunParams {
   sandboxBrief?: string | null;
   /** 预算生命周期钩子（M1，评审 P2-a）：等待审批时 Runtime 需要暂停/恢复本子任务的 Budget */
   onBudget?: (b: Budget, phase: 'start' | 'end') => void;
+  /** 无人值守自动放行（仅定时任务；由 Runtime 注入最终判定） */
+  autoPolicy?: ToolContext['autoPolicy'];
+  /** 本 run 是否读过疑似注入内容（自动放行必须拒绝） */
+  untrustedTainted?: boolean;
+  /** 本 run 是否允许 Codex 写模式 */
+  allowCodexWrite?: boolean;
 }
 
 function subtaskId(): string {
@@ -150,6 +156,7 @@ export async function runSubAgent(params: SubAgentRunParams): Promise<SubtaskOut
     log: config.log,
     approval: config.approval,
     sandbox: config.sandbox,
+    codex: config.codex,
   };
 
   const messages: ChatMessage[] = [
@@ -327,6 +334,9 @@ export async function runSubAgent(params: SubAgentRunParams): Promise<SubtaskOut
         sandbox: params.sandbox,
         requestApproval: params.requestApproval,
         emitEvent: params.emitEvent,
+        autoPolicy: params.autoPolicy,
+        untrustedTainted: params.untrustedTainted,
+        allowCodexWrite: params.allowCodexWrite,
         // 注意：**不注入 spawnSubAgent** → 子 Agent 结构上无法再委派（深度 ≤ 1）
       };
 

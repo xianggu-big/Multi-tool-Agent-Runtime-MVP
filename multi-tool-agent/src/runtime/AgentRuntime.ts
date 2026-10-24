@@ -52,6 +52,12 @@ import {
 } from '../security/untrusted.js';
 import { assessApprovalRisk } from '../security/approvalRisk.js';
 import { toolPoolFor } from './toolPool.js';
+import { runCodex } from '../codex/runner.js';
+import { startReasoningTap, readReasoning } from '../codex/reasoningTap.js';
+import { scanCodexChanges } from '../codex/importChanges.js';
+import { prepareCodexWorkspace } from '../codex/workspace.js';
+import { shortSha256 } from '../sandbox/hash.js';
+import type { PendingActionRecord } from '../scheduler/types.js';
 
 const MAX_TOOL_RESULT_CONTEXT = 32_000; // 单个工具结果写入模型上下文的最大字符数
 const MAX_RETRY = 1; // 仅对明确可重试错误重试一次
@@ -385,6 +391,8 @@ export const TOOL_PERMISSION: Record<string, string> = {
   submit_orchestration: 'orchestrator:report',
   // 人机协同：显式向用户提问（终态 awaiting_user，不是 completed）
   ask_user: 'agent:ask',
+  // 本机 Codex CLI（外部 code agent）：写模式另受 ctx.allowCodexWrite + 沙箱/审批约束
+  codex_exec: 'codex:exec',
   // 写能力（M1）：仅「可写子 Agent（code-edit）」的契约里出现，且受 CODEBASE_WRITE_ENABLED + 沙箱/审批通道三重门禁
   create_file: 'codebase:write',
   edit_file: 'codebase:write',
@@ -415,6 +423,10 @@ export class AgentRuntime {
   // -------------------------------------------------------------------------
   /** 沙箱会话（按 parentRunId 复用：子任务失败重派不丢半成品，评审 P1-4/v3-2） */
   private sandboxes = new Map<string, SandboxSession>();
+  /** Codex 稳定工作副本（按 workspaceId 复用；续问时 cwd 必须不变） */
+  private codexSandboxes = new Map<string, SandboxSession>();
+  /** 无人值守自动放行（仅定时任务；存 runId） */
+  private autoApproveRuns = new Set<string>();
   /** 挂起中的审批（key = `${runId}:${approvalId}`） */
   private pendingApprovals = new Map<
     string,
@@ -449,11 +461,17 @@ export class AgentRuntime {
 
   /** 创建任务记录（queued），返回 runId。不阻塞执行。可注入自定义 Provider（用于测试）。 */
   createRun(input: RunInput, provider?: LLMProvider): string {
+    if (this.cancellers.size >= this.config.maxActiveRuns) {
+      throw new Error(`TOO_MANY_ACTIVE_RUNS：当前有 ${this.cancellers.size} 个活动任务，上限 ${this.config.maxActiveRuns}`);
+    }
     const runId = `run_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
     const now = new Date().toISOString();
-    const resolved = provider ?? createProvider(this.config, input).provider;
-    this.providers.set(runId, resolved);
-    const isMock = resolved.name === 'mock';
+    // Codex 直连任务不走内置 LLM Loop：不需要 Provider（也不应因缺 Key 被拦）。
+    const resolved = provider ?? (input.runType === 'codex' ? undefined : createProvider(this.config, input).provider);
+    if (resolved) this.providers.set(runId, resolved);
+    const isMock = resolved?.name === 'mock';
+    // 无人值守自动放行只对「定时任务」生效（必须同时带 scheduleId）
+    if (input.autoApprove && input.scheduleId) this.autoApproveRuns.add(runId);
     const rec: RunRecord = {
       runId,
       runType: input.runType,
@@ -467,6 +485,7 @@ export class AgentRuntime {
       totalDurationMs: 0,
       usageJson: JSON.stringify(emptyUsage()),
       isMock: isMock ? 1 : 0,
+      scheduleId: input.scheduleId,
     };
     this.store.createRun(rec);
     return runId;
@@ -530,6 +549,23 @@ export class AgentRuntime {
     return true;
   }
 
+  /** 服务优雅退出：中止所有在飞 run（审批会按 cancel 语义解挂）。返回中止数量。 */
+  cancelAllActive(): number {
+    const ids = [...this.cancellers.keys()];
+    let n = 0;
+    for (const id of ids) if (this.cancel(id)) n += 1;
+    return n;
+  }
+
+  /** 等待所有在飞 run 退出（用于优雅退出；超时后返回剩余数量）。 */
+  async waitForIdle(timeoutMs = 2000): Promise<number> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.cancellers.size > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return this.cancellers.size;
+  }
+
   // ---------------------------------------------------------------------------
   // 写能力（M1）：沙箱会话 + 人工审批（三级：完全同意此文件 / 仅同意本次 / 拒绝）
   // ---------------------------------------------------------------------------
@@ -577,6 +613,7 @@ export class AgentRuntime {
     this.stickyFiles.delete(runId);
     this.consecutiveDenies.delete(runId);
     this.activeBudgets.delete(runId);
+    this.autoApproveRuns.delete(runId);
     this.untrustedTaint.delete(runId);
   }
 
@@ -629,6 +666,39 @@ export class AgentRuntime {
     const sensitiveFiles = req.files.filter((f) => isSensitive((f.relPath.split('/').pop() ?? f.relPath).toLowerCase()));
     const taint = this.untrustedTaint.get(runId);
     const tainted = !!taint && taint.hits.size > 0;
+
+    // 无人值守（仅定时任务）：高危/污点一律拒绝并留给事后确认；其余自动放行。
+    if (this.autoApproveRuns.has(runId)) {
+      const decidedAt = new Date().toISOString();
+      if (reasons.length > 0 || tainted) {
+        this.tracer.emit(runId, 'approval_decided', {
+          approvalId: req.approvalId,
+          value: 'deny',
+          actor: 'auto-policy',
+          autoByPolicy: true,
+          riskReasons: reasons,
+          tainted,
+          reason: '高危操作已暂缓（等待事后确认）',
+        });
+        return {
+          approvalId: req.approvalId,
+          value: 'deny',
+          reason: 'auto-policy：高危操作已暂缓，等待事后确认',
+          actor: 'auto-policy',
+          decidedAt,
+          autoByPolicy: true,
+        };
+      }
+      this.tracer.emit(runId, 'approval_decided', {
+        approvalId: req.approvalId,
+        value: 'allow_once',
+        actor: 'auto-policy',
+        autoByPolicy: true,
+        files: req.files.map((f) => f.relPath),
+      });
+      return { approvalId: req.approvalId, value: 'allow_once', actor: 'auto-policy', decidedAt, autoByPolicy: true };
+    }
+
     const allSticky = canAutoApprove({
       files: req.files.map((f) => f.relPath),
       ops: req.files.map((f) => f.op),
@@ -904,6 +974,10 @@ export class AgentRuntime {
     signal: AbortSignal,
     startedAt: number,
   ): Promise<RunResult> {
+    // Codex 直连任务：外部 Agent 适配器，不走内置 LLM Loop（仍复用 run/事件/取消/审批/复盘）。
+    if (input.runType === 'codex') {
+      return this.executeCodexRun(runId, input, signal, startedAt);
+    }
     const allowedTools = this.resolveAllowedTools(input);
     const allowedPermissions = this.resolvePermissions(allowedTools);
     const provider = this.providers.get(runId);
@@ -1507,36 +1581,7 @@ export class AgentRuntime {
   ): Promise<{ tool: import('../tools/types.js').Tool | null; result: import('../types.js').ToolResult; spanId: string }[]> {
     const out: { tool: any; result: any; spanId: string }[] = new Array(toolCalls.length);
     const maxOutputBytes = 256 * 1024;
-    // 搜索提供方：单次任务的 input.search 覆盖优先于全局 env 配置
-    const searchCfg = ctx.input.search
-      ? {
-          provider: ctx.input.search.provider ?? this.config.search.provider,
-          apiKey: ctx.input.search.apiKey ?? this.config.search.apiKey,
-          baseUrl: ctx.input.search.baseUrl ?? this.config.search.baseUrl,
-        }
-      : this.config.search;
-    const toolCfg: ToolRuntimeConfig = {
-      search: searchCfg,
-      codebase: {
-        ...this.config.codebase,
-        // 本 run 的测试开关：显式勾选可覆盖部署默认（默认关闭）
-        runTestsEnabled: ctx.input.allowRunTests ?? this.config.codebase.runTestsEnabled,
-      },
-      // 杂项任务的扫描/单文件上限：单次任务可覆盖（收紧），但不会超过服务端配置
-      misc: {
-        scanLimit: Math.min(ctx.input.misc?.scanLimit ?? this.config.misc.scanLimit, this.config.misc.scanLimit),
-        maxFileBytes: Math.min(ctx.input.misc?.maxFileBytes ?? this.config.misc.maxFileBytes, this.config.misc.maxFileBytes),
-      },
-      subagent: this.config.subagent,
-      maxOutputBytes,
-      log: this.config.log,
-      approval: this.config.approval,
-      sandbox: {
-        ...this.config.sandbox,
-        // 本 run 的「严格验证」覆盖：提交前额外跑 L2 全量（默认跟随部署配置）
-        l2BeforeApproval: ctx.input.orchestration?.strictVerify ?? this.config.sandbox.l2BeforeApproval,
-      },
-    };
+    const toolCfg = this.toolRuntimeConfig(ctx.input, maxOutputBytes);
 
     // 编排任务：把「派发子 Agent」的能力注入工具上下文（子 Agent 的上下文不注入 → 无法递归委派）
     const isOrchestrator = ctx.input.runType === 'orchestrator';
@@ -1584,6 +1629,12 @@ export class AgentRuntime {
           sandbox: this.getSandboxSession(runId, ctx.input.repoPath),
           requestApproval: (req) => this.requestApproval(runId, req),
           emitEvent: (type, data) => this.tracer.emit(runId, type, data),
+          // 无人值守与 Codex 写权限：只对定时任务 / 显式写授权的 run 注入
+          autoPolicy: this.autoPolicyFor(ctx.input, runId),
+          untrustedTainted: (this.untrustedTaint.get(runId)?.hits.size ?? 0) > 0,
+          allowCodexWrite:
+            this.config.codebase.writeEnabled &&
+            (ctx.input.codex?.allowWrite === true || ctx.input.orchestration?.allowWriteSpecs === true),
         };
 
         const toolSpanId = this.tracer.start(runId, 'tool', tc.name, {
@@ -1629,6 +1680,419 @@ export class AgentRuntime {
     this.store.updateRun({ runId, status: to, updatedAt: new Date().toISOString() });
   }
 
+  // ---------------------------------------------------------------------------
+  // Codex 直连（外部 Agent 适配器）
+  // ---------------------------------------------------------------------------
+
+  /** data/ 根（SQLite 所在目录；`:memory:` 回退到 ./data） */
+  private dataDir(): string {
+    const sqlite = this.config.sqlitePath;
+    return sqlite && sqlite !== ':memory:' ? dirname(resolve(sqlite)) : resolve('./data');
+  }
+
+  /** 稳定工作副本：key = codex_<workspaceId>（续问时 Codex 依赖原会话 cwd 不变） */
+  private getCodexSandbox(workspaceId: string, repoPath: string): SandboxSession {
+    const key = `codex_${workspaceId}`;
+    let s = this.codexSandboxes.get(key);
+    if (!s) {
+      s = new SandboxSession({ image: this.config.sandbox.image, repoPath, dataDir: this.dataDir() }, key);
+      this.codexSandboxes.set(key, s);
+    }
+    return s;
+  }
+
+  /** 登记一个待确认高危操作（删除/宿主命令/外部 MCP），返回 action id。 */
+  private createPendingActionRecord(
+    runId: string,
+    scheduleId: string | undefined,
+    kind: 'delete' | 'command' | 'mcp',
+    payload: Record<string, unknown>,
+  ): string {
+    const id = `pa_${randomUUID().slice(0, 8)}`;
+    const rec: PendingActionRecord = {
+      id,
+      runId,
+      scheduleId,
+      kind,
+      payload,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    this.store.createPendingAction(rec);
+    this.tracer.emit(runId, 'pending_action_created', {
+      actionId: id,
+      kind,
+      relPath: typeof payload.relPath === 'string' ? payload.relPath : undefined,
+      command: typeof payload.command === 'string' ? payload.command.slice(0, 500) : undefined,
+      server: typeof payload.server === 'string' ? payload.server : undefined,
+      tool: typeof payload.tool === 'string' ? payload.tool : undefined,
+    });
+    return id;
+  }
+
+  /** 仅定时任务注入：普通改动自动放行，delete/命令暂缓。 */
+  private autoPolicyFor(input: RunInput, runId: string): ToolContext['autoPolicy'] | undefined {
+    if (!input.autoApprove || !input.scheduleId) return undefined;
+    return {
+      enabled: true,
+      createPending: (a) => this.createPendingActionRecord(runId, input.scheduleId, a.kind, a.payload),
+    };
+  }
+
+  private buildCodexToolContext(
+    runId: string,
+    input: RunInput,
+    session: SandboxSession,
+    signal: AbortSignal,
+  ): ToolContext {
+    return {
+      runId,
+      runType: 'codex',
+      allowedPermissions: ['codebase:write'],
+      repoPath: input.repoPath,
+      signal,
+      maxOutputBytes: 256 * 1024,
+      config: this.toolRuntimeConfig(input, 256 * 1024),
+      depth: 0,
+      sandbox: session,
+      requestApproval: (req) => this.requestApproval(runId, req),
+      emitEvent: (type, data) => this.tracer.emit(runId, type, data),
+      autoPolicy: this.autoPolicyFor(input, runId),
+      untrustedTainted: (this.untrustedTaint.get(runId)?.hits.size ?? 0) > 0,
+      allowCodexWrite: true,
+    };
+  }
+
+  private async executeCodexRun(
+    runId: string,
+    input: RunInput,
+    signal: AbortSignal,
+    _startedAt: number,
+  ): Promise<RunResult> {
+    const cfg = this.config.codex;
+    const fail = (code: string, msg: string): RunResult =>
+      this.finalize(runId, 'failed', { emit: 'run_failed', failureReason: msg, errorCode: code });
+
+    if (!cfg.enabled) return fail('CODEX_DISABLED', 'Codex 已禁用（MTA_CODEX_ENABLED=false）');
+    if (!input.repoPath) return fail('INVALID_ARGS', 'Codex 任务必须提供 repoPath');
+    if (input.codex?.allowWrite && !this.config.codebase.writeEnabled) {
+      return fail('WRITE_DISABLED', '写能力已在部署层禁用（CODEBASE_WRITE_ENABLED=false）');
+    }
+
+    this.store.updateRun({ runId, isMock: 0, updatedAt: new Date().toISOString() });
+    this.setStatus(runId, 'running');
+    this.tracer.start(runId, 'run', 'run', {
+      spanId: runId,
+      parentId: null,
+      inputs: {
+        goal: input.goal,
+        runType: 'codex',
+        repoPath: input.repoPath,
+        isMock: false,
+        scheduleId: input.scheduleId,
+        codex: {
+          mode: input.codex?.allowWrite ? 'write' : 'read_only',
+          resumeThreadId: input.codex?.resumeThreadId,
+          workspaceId: input.codex?.workspaceId,
+        },
+      },
+      extra: { allowedTools: [], limits: this.resolveLimits(input) },
+    });
+
+    const mode: 'read_only' | 'write' = input.codex?.allowWrite ? 'write' : 'read_only';
+    const workspaceId = input.codex?.workspaceId ?? `ws_${randomUUID().slice(0, 8)}`;
+    // 续接会话：`codex exec resume` 不接受 -C，实际 cwd 由原会话决定；
+    // 写模式必须带 workspaceId，才能保证新会话的副本目录与原会话一致。
+    if (mode === 'write' && input.codex?.resumeThreadId && !input.codex?.workspaceId) {
+      return fail('CODEX_WORKSPACE_REQUIRED', '续接写会话必须带 workspaceId（从上一轮结果读取）');
+    }
+    let session: SandboxSession | undefined;
+    let cwd = input.repoPath;
+    if (mode === 'write') {
+      session = this.getCodexSandbox(workspaceId, input.repoPath);
+      const ready = await session.ensure();
+      if (!ready.ok) return fail('SANDBOX_UNAVAILABLE', ready.reason);
+      cwd = session.copyDir();
+    } else if (input.codex?.resumeThreadId && !input.codex?.workspaceId) {
+      // 续问但没带 workspaceId：Codex 用原会话 cwd；这里不额外建副本
+      cwd = input.repoPath;
+    } else {
+      // 只读也走副本（宿主侧，无需 Docker）：排除 .env*/.git/data，避免绕过敏感文件拒读
+      cwd = await prepareCodexWorkspace({ repoPath: input.repoPath, dataDir: this.dataDir(), workspaceId });
+    }
+
+    const llmSpan = this.tracer.start(runId, 'llm', 'codex', {
+      spanId: `codex_${runId}`,
+      parentId: runId,
+      step: 1,
+      inputs: {
+        prompt: input.goal.slice(0, 2000),
+        cwd,
+        mode,
+        resumeThreadId: input.codex?.resumeThreadId,
+        model: input.codex?.model ?? cfg.model,
+      },
+    });
+
+    let reasoning = '';
+    let content = '';
+    let reasoningCaptured = false;
+    let tapStop: (() => void) | undefined;
+    let codexUsage: import('../codex/runner.js').CodexUsage | undefined;
+    let threadId: string | undefined;
+
+    const result = await runCodex({
+      bin: cfg.bin,
+      model: input.codex?.model ?? cfg.model,
+      cwd,
+      prompt: buildCodexPrompt(input, cwd, mode),
+      mode,
+      resumeThreadId: input.codex?.resumeThreadId,
+      timeoutMs: cfg.timeoutMs,
+      maxOutputBytes: cfg.maxOutputBytes,
+      signal,
+      onEvent: (ev) => {
+        switch (ev.type) {
+          case 'thread': {
+            threadId = ev.threadId;
+            this.tracer.emit(runId, 'codex_thread', {
+              threadId: ev.threadId,
+              cwd,
+              mode,
+              workspaceId,
+              resume: !!input.codex?.resumeThreadId,
+            });
+            if (cfg.reasoningTap && !tapStop) {
+              tapStop = startReasoningTap({
+                threadId: ev.threadId,
+                skipHistory: !!input.codex?.resumeThreadId,
+                maxChars: 60_000,
+                onText: (text) => {
+                  reasoningCaptured = true;
+                  reasoning += text;
+                  this.tracer.delta(runId, llmSpan, 'reasoning', text);
+                },
+              }).stop;
+            }
+            break;
+          }
+          case 'message': {
+            content += (content ? '\n' : '') + ev.text;
+            this.tracer.delta(runId, llmSpan, 'content', (content.length > ev.text.length ? '\n' : '') + ev.text);
+            this.tracer.emit(runId, 'codex_message', { text: ev.text });
+            break;
+          }
+          case 'command_started': {
+            this.tracer.start(runId, 'tool', 'codex_shell', {
+              spanId: `${llmSpan}_cmd_${ev.item.id}`,
+              parentId: llmSpan,
+              step: 1,
+              inputs: { command: ev.item.command },
+              extra: { toolCallId: ev.item.id },
+            });
+            break;
+          }
+          case 'command_completed': {
+            this.tracer.finish(runId, `${llmSpan}_cmd_${ev.item.id}`, 'tool', {
+              status: 'ok',
+              outputs: {
+                output: (ev.item.output ?? '').slice(0, 4000),
+                exitCode: ev.item.exitCode ?? null,
+                codexStatus: ev.item.status,
+              },
+              extra: { toolCallId: ev.item.id },
+            });
+            break;
+          }
+          case 'reasoning': {
+            reasoningCaptured = true;
+            reasoning += ev.text;
+            this.tracer.delta(runId, llmSpan, 'reasoning', ev.text);
+            break;
+          }
+          case 'usage': {
+            codexUsage = ev.usage;
+            break;
+          }
+          case 'error': {
+            break;
+          }
+          case 'warning': {
+            break;
+          }
+        }
+      },
+    });
+
+    tapStop?.();
+    // 轮询可能晚于进程退出：新会话补一次最终读取（续问不重放历史思考）
+    if (cfg.reasoningTap && threadId && !reasoningCaptured && !input.codex?.resumeThreadId) {
+      const final = readReasoning(threadId, { maxChars: 60_000 });
+      if (final.text) {
+        reasoningCaptured = true;
+        reasoning += final.text;
+      }
+    }
+
+    this.tracer.finish(runId, llmSpan, 'llm', {
+      status: result.ok ? 'ok' : 'error',
+      outputs: {
+        contentPreview: result.finalAnswer.slice(0, STREAM_PREVIEW_CHARS),
+        reasoningPreview: reasoning.slice(0, STREAM_PREVIEW_CHARS),
+        stopReason: result.ok ? 'end_turn' : 'error',
+        threadId,
+        codexUsage,
+        reasoningCaptured,
+        mode,
+        cwd,
+      },
+      error: result.ok ? undefined : { code: 'CODEX_FAILED', message: result.error ?? 'Codex 执行失败' },
+    });
+
+    // 写模式：副本改动 → 逐文件 stage → 复用 submit_changes（阶梯/审批/落盘/复验）
+    let changesSummary: import('../types.js').CodexRunSummary['changes'];
+    const deferredList: NonNullable<import('../types.js').CodexRunSummary['deferred']> = [];
+    if (session) {
+      try {
+        if (result.ok && !signal.aborted) {
+          const scanned = await scanCodexChanges({ repoPath: input.repoPath, copyDir: cwd });
+          // 无人值守：删除一律暂缓；手动运行：照常走 submit_changes 的高危审批
+          const deferDeletes = !!(input.autoApprove && input.scheduleId);
+          const refused: string[] = [];
+          const deferredRels: string[] = [];
+          let imported = 0;
+          for (const c of scanned.changes) {
+            if (c.op === 'delete' && deferDeletes) {
+              const base = session.readRepoFile(c.relPath);
+              const id = this.createPendingActionRecord(runId, input.scheduleId, 'delete', {
+                repoPath: input.repoPath,
+                relPath: c.relPath,
+                baseHash: base !== null ? shortSha256(base) : undefined,
+              });
+              deferredRels.push(c.relPath);
+              deferredList.push({ id, kind: 'delete', relPath: c.relPath });
+              continue;
+            }
+            try {
+              await session.stage(c.relPath, c.op, c.content, { signal });
+              imported++;
+            } catch (e) {
+              refused.push(`${c.relPath}：${(e as Error).message}`);
+            }
+          }
+          if (imported > 0) {
+            const tctx = this.buildCodexToolContext(runId, input, session, signal);
+            const appliedAll: string[] = [];
+            const refusedAll: string[] = [...refused];
+            const deferredAll: string[] = [...deferredRels];
+            // 单批最多 approval.maxFilesPerRequest 个文件；有剩余时继续提交（最多 5 轮）
+            for (let round = 0; round < 5; round++) {
+              const outcome = await this.registry.execute(
+                'submit_changes',
+                { summary: `Codex 改动（第 ${round + 1} 批）` },
+                tctx,
+              );
+              const data = outcome.result.ok ? (outcome.result.data as any) : undefined;
+              if (Array.isArray(data?.applied)) appliedAll.push(...data.applied);
+              if (Array.isArray(data?.refused)) refusedAll.push(...data.refused);
+              if (Array.isArray(data?.deferred)) {
+                for (const d of data.deferred) {
+                  if (!d) continue;
+                  if (typeof d.relPath === 'string') deferredAll.push(d.relPath);
+                  if (typeof d.id === 'string') deferredList.push(d);
+                }
+              }
+              if (!outcome.result.ok) {
+                refusedAll.push(outcome.result.error?.message ?? 'submit_changes 失败');
+                break;
+              }
+              if (!data?.deferredNote) break;
+            }
+            changesSummary = {
+              imported,
+              applied: appliedAll,
+              deferred: [...new Set(deferredAll.filter(Boolean))],
+              refused: refusedAll,
+              skipped: scanned.skipped,
+            };
+          } else {
+            changesSummary = {
+              imported: 0,
+              applied: [],
+              deferred: deferredRels,
+              refused,
+              skipped: scanned.skipped,
+            };
+          }
+        }
+      } finally {
+        session.dispose(); // 只停容器；宿主副本保留，供续问/审计
+      }
+    }
+
+    // 用量：Codex 自带计费，token 如实记录，费用标为未计入
+    const usage = codexUsage
+      ? {
+          promptTokens: codexUsage.inputTokens,
+          completionTokens: codexUsage.outputTokens,
+          totalTokens: codexUsage.inputTokens + codexUsage.outputTokens,
+          costUsd: 0,
+          isEstimate: true,
+          tokensEstimated: false,
+          estimateNote: 'Codex CLI 外部用量：token 来自 CLI 回报，费用未计入',
+          cachedPromptTokens: codexUsage.cachedInputTokens,
+          reasoningTokens: codexUsage.reasoningOutputTokens,
+        }
+      : undefined;
+    const usagePatch: Record<string, unknown> = {
+      runId,
+      modelCalls: 1,
+      toolCalls: result.commands.length,
+      steps: 1,
+      updatedAt: new Date().toISOString(),
+    };
+    // 注意：undefined 也会被 `f in patch` 视为存在 → NOT NULL 约束失败；只在有值时写入
+    if (usage) usagePatch.usageJson = JSON.stringify(usage);
+    this.store.updateRun(usagePatch as any);
+
+    const summary: import('../types.js').CodexRunSummary = {
+      threadId,
+      cwd,
+      mode,
+      workspaceId,
+      model: input.codex?.model ?? cfg.model,
+      answer: result.finalAnswer.slice(0, cfg.summaryChars),
+      messages: result.messages,
+      usage: codexUsage,
+      commands: result.commands.length,
+      changes: changesSummary,
+      deferred: deferredList.length ? deferredList : undefined,
+      reasoningCaptured,
+      exitCode: result.exitCode,
+    };
+
+    if (result.aborted || signal.aborted) {
+      return this.finalize(runId, 'cancelled', {
+        emit: 'run_cancelled',
+        failureReason: '用户取消任务',
+        codex: summary,
+      });
+    }
+    if (!result.ok) {
+      return this.finalize(runId, 'failed', {
+        emit: 'run_failed',
+        failureReason: result.error ?? 'Codex 执行失败',
+        errorCode: 'CODEX_FAILED',
+        codex: summary,
+      });
+    }
+    return this.finalize(runId, 'completed', {
+      emit: 'run_completed',
+      finalAnswer: result.finalAnswer || '（Codex 未返回文本）',
+      codex: summary,
+    });
+  }
+
   private finalize(
     runId: string,
     status: Extract<RunStatus, 'completed' | 'failed' | 'cancelled' | 'limit_reached' | 'awaiting_user'>,
@@ -1646,6 +2110,8 @@ export class AgentRuntime {
       subtasks?: SubtaskOutcome[];
       /** 显式等待用户回答（ask_user） */
       awaitingUser?: AwaitingUser;
+      /** Codex 直连任务的结构化结果 */
+      codex?: import('../types.js').CodexRunSummary;
     },
   ): RunResult {
     const rec = this.store.getRun(runId);
@@ -1668,7 +2134,7 @@ export class AgentRuntime {
       errorCode: opts.errorCode,
       triggeredLimit: opts.triggeredLimit,
       totalDurationMs,
-      resultJson: packResultJson({ misc: opts.misc, orchestration: opts.orchestration, subtasks: opts.subtasks, awaitingUser: opts.awaitingUser }),
+      resultJson: packResultJson({ misc: opts.misc, orchestration: opts.orchestration, subtasks: opts.subtasks, awaitingUser: opts.awaitingUser, codex: opts.codex }),
       updatedAt: new Date().toISOString(),
     });
     const spanStatus = status === 'completed' || status === 'awaiting_user' ? 'ok' : status === 'failed' ? 'error' : 'cancelled';
@@ -1893,6 +2359,11 @@ export class AgentRuntime {
           emitEvent: (type, data) => this.tracer.emit(runId, type, data),
           sandboxBrief: hasWrite ? (sandbox?.briefFor() ?? null) : null,
           onBudget: this.budgetHook(runId),
+          autoPolicy: this.autoPolicyFor(ctx.input, runId),
+          untrustedTainted: (this.untrustedTaint.get(runId)?.hits.size ?? 0) > 0,
+          allowCodexWrite:
+            this.config.codebase.writeEnabled &&
+            (ctx.input.codex?.allowWrite === true || ctx.input.orchestration?.allowWriteSpecs === true),
         });
       } catch (e) {
         // 子 Agent 抛出未预期异常（正常路径应被 runSubAgent 规范化；这里是最后一道）
@@ -1999,7 +2470,40 @@ export class AgentRuntime {
     return new Budget(limits, Date.now());
   }
 
+  /** 工具运行配置（主循环 / 子 Agent / Codex 三处共用，避免漂移） */
+  private toolRuntimeConfig(input: RunInput, maxOutputBytes: number): ToolRuntimeConfig {
+    const searchCfg = input.search
+      ? {
+          provider: input.search.provider ?? this.config.search.provider,
+          apiKey: input.search.apiKey ?? this.config.search.apiKey,
+          baseUrl: input.search.baseUrl ?? this.config.search.baseUrl,
+        }
+      : this.config.search;
+    return {
+      search: searchCfg,
+      codebase: {
+        ...this.config.codebase,
+        runTestsEnabled: input.allowRunTests ?? this.config.codebase.runTestsEnabled,
+      },
+      misc: {
+        scanLimit: Math.min(input.misc?.scanLimit ?? this.config.misc.scanLimit, this.config.misc.scanLimit),
+        maxFileBytes: Math.min(input.misc?.maxFileBytes ?? this.config.misc.maxFileBytes, this.config.misc.maxFileBytes),
+      },
+      subagent: this.config.subagent,
+      maxOutputBytes,
+      log: this.config.log,
+      approval: this.config.approval,
+      sandbox: {
+        ...this.config.sandbox,
+        l2BeforeApproval: input.orchestration?.strictVerify ?? this.config.sandbox.l2BeforeApproval,
+      },
+      codex: this.config.codex,
+    };
+  }
+
   private resolveAllowedTools(input: RunInput): string[] {
+    // Codex 直连任务用自己的工具循环；不暴露内置工具（写落盘走 submit_changes 的显式内部调用）。
+    if (input.runType === 'codex') return [];
     // run_tests 是「在目标仓库执行代码」的能力：默认关闭（安全默认），
     // 未开启时不进工具池——模型看不到它，也就不会白调一次再拿 DISABLED。
     const runTestsOn = input.allowRunTests ?? this.config.codebase.runTestsEnabled;
@@ -2010,6 +2514,7 @@ export class AgentRuntime {
       runTestsEnabled: runTestsOn,
       allowSelfTools: input.orchestration?.allowSelfTools ?? this.config.orchestrator.allowSelfTools,
       mcpTools,
+      codexEnabled: this.config.codex.enabled,
     });
     if (input.allowedTools && input.allowedTools.length) {
       // 服务端校验：仅保留既在池内又已注册的工具，忽略未知/越权项
@@ -2028,10 +2533,23 @@ export class AgentRuntime {
   }
 }
 
-/**
- * 把 submit_result 的数据归一化为 MiscReport。
- * 该工具的 inputSchema 已经保证结构合法；这里只做「防脏」收口（Runtime 不信任任何工具输出）。
- */
+/** Codex 任务的提示词：工作目录 + 模式 + 安全边界 + 用户目标（用户目标只走 stdin）。 */
+function buildCodexPrompt(input: RunInput, cwd: string, mode: 'read_only' | 'write'): string {
+  const lines = [
+    `[工作目录] ${cwd}`,
+    mode === 'write'
+      ? '[模式] 你可以在当前工作副本中修改文件；改动会由运行时统一走检查与审批后落盘，不会直接生效。'
+      : '[模式] 只读：不要修改任何文件。',
+  ];
+  if (input.codex?.safetyPrompt?.trim()) lines.push(`[安全边界] ${input.codex.safetyPrompt.trim()}`);
+  if (input.codex?.dangerPatterns?.length) lines.push(`[禁止操作] ${input.codex.dangerPatterns.join('；')}`);
+  if (mode === 'write') {
+    lines.push('[删除] 不要删除文件；如需删除，请说明原因并让用户确认（删除会被暂缓，不会自动执行）。');
+  }
+  lines.push('[任务]', input.goal);
+  return lines.join('\n');
+}
+
 function toMiscReport(data: unknown): MiscReport {
   const d = (data ?? {}) as Record<string, unknown>;
   const str = (v: unknown, max = 4000): string | undefined =>

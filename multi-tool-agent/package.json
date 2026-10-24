@@ -10,6 +10,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "doctor": "node --import tsx scripts/doctor.ts",
+    "embed:check": "node scripts/embed-selfcheck.mjs",
     "start": "node --import tsx src/index.ts",
     "dev": "node --watch --import tsx src/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
@@ -32,6 +33,8 @@
     "digest:list": "node --import tsx scripts/run-digest-list.ts",
     "stats:subtasks": "node --import tsx scripts/subtask-stats.ts",
     "rag:bench": "node --import tsx scripts/rag-bench.ts",
+    "rag:cleanup-legacy": "node --import tsx scripts/cleanup-legacy-vector.ts",
+    "ingest:docs": "node --import tsx scripts/ingest-docs.ts",
     "rag:ablation": "node --import tsx scripts/rag-ablation.ts",
     "eval:edit": "node --import tsx scripts/edit-eval.ts",
     "eval:edit:real": "node --import tsx scripts/edit-eval-real.ts",

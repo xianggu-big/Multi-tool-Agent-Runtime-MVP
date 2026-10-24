@@ -42,6 +42,15 @@ export function baseToolConfig(runTestsEnabled = false): ToolRuntimeConfig {
       execTimeoutMs: 600000,
       l2BeforeApproval: false,
     },
+    codex: {
+      enabled: false,
+      bin: 'codex',
+      model: undefined,
+      timeoutMs: 600000,
+      maxOutputBytes: 4 * 1024 * 1024,
+      reasoningTap: false,
+      summaryChars: 20000,
+    },
   };
 }
 

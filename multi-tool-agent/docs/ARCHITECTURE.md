@@ -116,7 +116,7 @@
 
 ### 2.5g `src/knowledge/*` + `src/mcp/*` + `src/observability/*`（RAG / MCP / 诊断）
 
-- `src/knowledge/{chunking,embeddings,vectorIndex,hybrid,ragPipeline}.ts`：切块级 RAG（doc → chunk → embedding → BM25 + Flat/HNSW/IVF → RRF/加权融合 → rerank）。`KnowledgeHub` 懒构建并在写/删后失效；HTTP 路由 `/api/rag/*`。与既有 FTS5/vec0 的 `VectorRecall` 并存，不替换。
+- `src/knowledge/{chunking,embeddings,vectorIndex,hybrid,ragPipeline}.ts`：切块级 RAG（doc → chunk → embedding → BM25 + Flat/HNSW/IVF → RRF/加权融合 → rerank）。`KnowledgeHub` 懒构建并在写/删后失效；HTTP 路由 `/api/rag/*`。**2026-10-24 起这是唯一检索/向量路径**：`/api/knowledge/search` 的 keyword/semantic/hybrid 都走它，旧 `data_vec`（sqlite-vec）停写，`VectorRecall` 仅保留为历史兼容工具。
 - `src/mcp/*`：MCP JSON-RPC server/client、stdio 与 Streamable HTTP transport、ToolRegistry 桥接（`mcp_` 前缀 + `mcp:call` 权限）。
 - `src/observability/latency.ts`：单 run 慢回答诊断（wall/busy、sum/union、TTFT、token 热点），HTTP `GET /api/runs/:id/diagnosis`。
 - 详细取舍与实测见 `docs/RAG_AND_AGENT_STACK.md` 与 `reports/RAG_EVAL.md`。

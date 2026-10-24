@@ -39,6 +39,16 @@ export interface ToolRuntimeConfig {
   approval: { maxFilesPerRequest: number };
   /** 沙箱（M1）：宿主复验的 Node 绝对路径 + 命令超时 */
   sandbox: { image: string; hostNodePath: string; execTimeoutMs: number; l2BeforeApproval: boolean };
+  /** Codex 适配器（仅 codex_exec 工具使用；不含任何密钥） */
+  codex: {
+    enabled: boolean;
+    bin: string;
+    model?: string;
+    timeoutMs: number;
+    maxOutputBytes: number;
+    reasoningTap: boolean;
+    summaryChars: number;
+  };
 }
 
 /** 工具执行上下文：由 Runtime 在每个工具调用时构造并传入 */
@@ -63,6 +73,19 @@ export interface ToolContext {
   depth?: number;
   /** 本次允许使用的子 Agent 规格白名单（来自 RunInput.orchestration.allowedSpecs） */
   allowedSpecs?: string[];
+  /**
+   * 无人值守自动放行（仅定时任务）：普通 create/edit 自动落盘；delete/命令暂缓进待确认队列。
+   * Runtime 只在「请求带 scheduleId」时注入；工具必须 fail-closed（未注入 = 走人工审批）。
+   */
+  autoPolicy?: {
+    enabled: true;
+    /** 登记一个待确认高危操作；返回 action id */
+    createPending: (action: { kind: 'delete' | 'command' | 'mcp'; payload: Record<string, unknown> }) => string;
+  };
+  /** 本 run 是否读过疑似注入内容（自动放行必须拒绝） */
+  untrustedTainted?: boolean;
+  /** 本 run 是否允许 Codex 写模式（由 Runtime 依据请求授权 + 部署门禁给出最终判定） */
+  allowCodexWrite?: boolean;
   /**
    * 写能力（M1'）：本 run 是否允许派发「可写子 Agent（code-edit）」。
    * 由 Runtime 注入**最终判定**（请求授权 `allowWriteSpecs` && 部署门禁 `CODEBASE_WRITE_ENABLED`）；
@@ -149,6 +172,8 @@ export interface SandboxAccess {
   applyToRepo(rel: string, approvalId?: string): { ok: true } | { ok: false; reason: string } | Promise<{ ok: true } | { ok: false; reason: string }>;
   rollbackFromBackup(rel: string, approvalId?: string): boolean | Promise<boolean>;
   backupsDir(): string;
+  /** 宿主侧仓库快照目录（Codex 写模式的 cwd；测试替身可不实现） */
+  copyDir?(): string;
   stageCommand(cmd: {
     command: string;
     shell: 'bash' | 'powershell' | 'cmd';

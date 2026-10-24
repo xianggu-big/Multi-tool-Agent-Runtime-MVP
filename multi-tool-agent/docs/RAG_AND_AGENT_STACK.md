@@ -209,6 +209,7 @@ score(d) = Σ_i  weight_i / (k + rank_i(d))
 - 新增工具 `knowledge_search`（权限 `knowledge:read`）：参数 `query / k / mode / collection`，返回 `chunkId / docId / heading / score / sources / text`。
 - 它走的是切块级 RAG（`KnowledgeHub.searchRag`），不是旧的 FTS5 混合检索；`codebase` / `research` / `orchestrator` 的自检工具池与 `doc-research` 子 Agent 都已加入。
 - MCP 的 `kb_search` 也改成同一条切块管线，返回 chunk 级来源，便于引用与高亮。
+- **2026-10-24 统一**：`GET /api/knowledge/search?mode=keyword|semantic|hybrid` 与 `KnowledgeHub.searchKnowledge` 也走这条管线；chunk 命中按 `docId` 聚合（取最高分 chunk，`chunkHits` 记录命中块数），避免长文档挤占 doc 级 top-k。旧 `data_vec` 停写，`searchSemantic` / `searchHybrid` 退为兼容包装。
 
 ### 3.6 切块 / 维度消融（`reports/RAG_ABLATION.md`）
 

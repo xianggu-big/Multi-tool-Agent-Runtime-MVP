@@ -251,7 +251,8 @@ export interface RerankedCandidate extends RerankCandidate {
 
 export interface Reranker {
   readonly name: string;
-  rerank(query: string, candidates: RerankCandidate[], topN?: number): RerankedCandidate[];
+  /** 同步（词法）或异步（cross-encoder HTTP）实现都可以；调用方统一 await */
+  rerank(query: string, candidates: RerankCandidate[], topN?: number): RerankedCandidate[] | Promise<RerankedCandidate[]>;
 }
 
 /**

@@ -37,6 +37,12 @@ export interface RuntimeConfig {
     costBudgetUsd: number;
   };
   maxToolConcurrency: number;
+  /** 同时活动的 run 上限（queued/running/waiting_tool/awaiting_user），防止 API/定时任务堆爆 */
+  maxActiveRuns: number;
+  /** 浏览器错误上报限流：每 IP 每分钟最多接受多少条（0 = 关闭限流） */
+  clientErrorsPerMinute: number;
+  /** 数据保留天数（仅用于「维护」页的候选计算；不会自动删除） */
+  dataRetentionDays: number;
   sqlitePath: string;
   codebase: {
     runTestsEnabled: boolean;
@@ -85,6 +91,23 @@ export interface RuntimeConfig {
     /** 启动桥接成功后由 McpClientRuntime 回填；供工具池按 runType 暴露。 */
     toolNames: string[];
   };
+  /** 本机 Codex CLI 适配器（runType='codex' 与 codex_exec 工具共用） */
+  codex: {
+    /** 总开关：关闭后不接受 codex run，也不注册 codex_exec */
+    enabled: boolean;
+    /** 可执行文件名/路径（默认 codex） */
+    bin: string;
+    /** 可选：覆盖本机默认模型（透传 -m）；空 = 用 Codex 自己的配置 */
+    model?: string;
+    /** 单次执行上限（毫秒） */
+    timeoutMs: number;
+    /** stdout/事件缓冲上限（字节） */
+    maxOutputBytes: number;
+    /** 是否旁路读取会话 rollout 拿思考文本（best-effort） */
+    reasoningTap: boolean;
+    /** 最终答案回传/落库的字符上限 */
+    summaryChars: number;
+  };
   /** 编排主 Agent 的默认预算 */
   orchestrator: {
     maxSteps: number;
@@ -111,6 +134,10 @@ export interface RuntimeConfig {
     defaultParams: LLMGenerationParams;
   };
   port: number;
+  /** HTTP bind host（默认只监听回环；非回环必须配 MTA_AUTH_TOKEN） */
+  host: string;
+  /** 可选 Bearer token；配置后所有业务 API 都要求认证 */
+  authToken?: string;
   log: {
     maxContentChars: number;
     toolResults: boolean;
@@ -119,6 +146,8 @@ export interface RuntimeConfig {
     /** 每次 run 终态的复盘摘要（JSONL，一行一个 run：成功也写、失败优先）。
      *  留空 = 自动跟随 SQLite 目录（`<dataDir>/run-digest.jsonl`）；`:memory:`（测试）不落盘。 */
     runDigestPath: string;
+    /** errors.log 单文件大小上限（字节）；超过后轮转为 errors.log.1（0 = 不轮转） */
+    errorLogMaxBytes: number;
   };
   /** 实时流式展示（Live View）配置 */
   stream: {
@@ -134,7 +163,45 @@ export interface RuntimeConfig {
     watchdogMs: number;
     /** 是否输出 SSE 连接与帧级调试日志。 */
     debug: boolean;
+    /** 同时打开的 SSE 连接上限，超过返回 429（防止浏览器标签页/脚本堆积） */
+    maxConnections: number;
   };
+}
+
+/** 是否为本机回环地址（只有这些 host 允许无 token 启动）。 */
+export function isLoopbackHost(host: string): boolean {
+  const h = String(host ?? '').trim().toLowerCase();
+  if (!h) return false;
+  if (h === 'localhost' || h === '::1' || h === '[::1]') return true;
+  if (h.startsWith('127.')) return true;
+  // IPv4-mapped IPv6 回环（Windows 双栈常见）
+  if (h === '::ffff:127.0.0.1') return true;
+  return false;
+}
+
+/**
+ * 启动期网络安全检查（fail-fast）：
+ * - 默认只绑回环；
+ * - 一旦绑定 0.0.0.0 / :: / 局域网 IP，就必须配置足够长的 Bearer token。
+ *
+ * 注意：这里只校验“配置是否安全”，不做网络探测，便于测试和 doctor 复用。
+ */
+export function assertHttpSecurity(config: Pick<RuntimeConfig, 'host' | 'authToken'>): void {
+  if (isLoopbackHost(config.host)) {
+    if (config.authToken && config.authToken.length < 32) {
+      throw new Error('MTA_AUTH_TOKEN 至少需要 32 个字符');
+    }
+    return;
+  }
+  if (!config.authToken) {
+    throw new Error(
+      `MTA_HOST=${config.host} 会监听非回环地址，必须同时配置 MTA_AUTH_TOKEN（至少 32 字符）；` +
+        '只想本机使用请删除 MTA_HOST 或设为 127.0.0.1',
+    );
+  }
+  if (config.authToken.length < 32) {
+    throw new Error('MTA_AUTH_TOKEN 至少需要 32 个字符');
+  }
 }
 
 export function loadConfig(): RuntimeConfig {
@@ -179,6 +246,9 @@ export function loadConfig(): RuntimeConfig {
       costBudgetUsd: Number(getEnv('DEFAULT_COST_BUDGET_USD', '0')) || 0,
     },
     maxToolConcurrency: getInt('MAX_TOOL_CONCURRENCY', 4),
+    maxActiveRuns: clamp(getInt('MAX_ACTIVE_RUNS', 64), 1, 1024),
+    clientErrorsPerMinute: clamp(getInt('CLIENT_ERRORS_PER_MIN', 30), 0, 10_000),
+    dataRetentionDays: clamp(getInt('DATA_RETENTION_DAYS', 30), 1, 3650),
     sqlitePath: getEnv('SQLITE_PATH', './data/runtime.db'),
     subagent: {
       maxConcurrency: clamp(getInt('SUBAGENT_MAX_CONCURRENCY', 4), 1, 8),
@@ -190,6 +260,15 @@ export function loadConfig(): RuntimeConfig {
     mcp: {
       servers: parseMcpServers(getEnv('MTA_MCP_SERVERS')),
       toolNames: [],
+    },
+    codex: {
+      enabled: getBool('MTA_CODEX_ENABLED', true),
+      bin: getEnv('MTA_CODEX_BIN', 'codex'),
+      model: getEnv('MTA_CODEX_MODEL') || undefined,
+      timeoutMs: clamp(getInt('MTA_CODEX_TIMEOUT_MS', 600000), 10000, 3600000),
+      maxOutputBytes: clamp(getInt('MTA_CODEX_MAX_OUTPUT_BYTES', 4 * 1024 * 1024), 64 * 1024, 32 * 1024 * 1024),
+      reasoningTap: getBool('MTA_CODEX_REASONING_TAP', true),
+      summaryChars: clamp(getInt('MTA_CODEX_SUMMARY_CHARS', 20000), 1000, 200000),
     },
     orchestrator: {
       maxSteps: clamp(getInt('ORCH_MAX_STEPS', 8), 1, 20),
@@ -240,11 +319,14 @@ export function loadConfig(): RuntimeConfig {
       autoRestoreMissing: getBool('RECOVERY_AUTO_RESTORE_MISSING', true),
     },
     port: getInt('PORT', 3000),
+    host: getEnv('MTA_HOST', '127.0.0.1').trim() || '127.0.0.1',
+    authToken: getEnv('MTA_AUTH_TOKEN') || undefined,
     log: {
       maxContentChars: getInt('LOG_MAX_CONTENT_CHARS', 2000),
       toolResults: getBool('LOG_TOOL_RESULTS', false),
       errorLogPath: getEnv('ERROR_LOG_PATH', './data/errors.log'),
       runDigestPath: getEnv('RUN_DIGEST_PATH', ''),
+      errorLogMaxBytes: clamp(getInt('ERROR_LOG_MAX_BYTES', 10 * 1024 * 1024), 0, 1024 * 1024 * 1024),
     },
     stream: {
       // 默认关闭：测试/脚本零开销、行为与引入前一致；服务端入口（src/index.ts）会默认开启。
@@ -255,6 +337,7 @@ export function loadConfig(): RuntimeConfig {
       heartbeatMs: clamp(getInt('STREAM_HEARTBEAT_MS', 15000), 1000, 600000),
       watchdogMs: clamp(getInt('STREAM_WATCHDOG_MS', 2000), 250, 60000),
       debug: getBool('STREAM_DEBUG', false),
+      maxConnections: clamp(getInt('STREAM_MAX_CONNECTIONS', 32), 1, 1000),
     },
   };
 }

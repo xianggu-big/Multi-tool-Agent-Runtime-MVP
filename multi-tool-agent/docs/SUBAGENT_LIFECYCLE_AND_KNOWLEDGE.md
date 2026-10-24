@@ -3,6 +3,10 @@
 > **背景**：新加的系统需要与子 Agent 适配。两件事：① 低重要性子 Agent（一次性搜索）完成后的自动清理/销毁判定；② 把系统打造成可维护、可持续成长的知识库——调研业界先进方案 / GitHub 开源项目，下载集成并适配，支持知识库的动态维护与扩展。
 > **最后更新**：2026-10-13 ｜ 本轮产出：`SubAgentLifecycle.ts`（自动回收判定器）+ `vectorRecall.ts`（语义召回层，sqlite-vec 集成）+ 53 个新测试全绿。
 
+> **⚠️ 2026-10-24 重要变更**：本文第 2.3 节的 `data_vec` / `VectorRecall` 双轨已成历史。
+> 关键词/语义/混合检索现在统一走切块级 RAG（`rag_chunks` + BM25 + Flat/HNSW/IVF + RRF/rerank），
+> `putData` 不再写 `data_vec`。当前口径见 `docs/KNOWLEDGE_SYSTEM.md` 第八节。
+
 ---
 
 ## 一、子 Agent 生命周期自动清理（已实现）
@@ -76,7 +80,7 @@
 
 | 项目 | Stars | 语言 | 适配度 | 选用结论 |
 |---|---|---|---|---|
-| **[sqlite-vec](https://github.com/asg017/sqlite-vec)** | ~4k | C(扩展) | ⭐⭐⭐⭐⭐ | **已集成**。纯 C、零依赖、与现有 better-sqlite3 同库；本机探测 v0.1.9 可加载；vec0 虚表 + 辅助列 `data_id text` 关联 data_items |
+| **[sqlite-vec](https://github.com/asg017/sqlite-vec)** | ~4k | C(扩展) | ⭐⭐⭐⭐⭐ | **历史集成（2026-10-24 停写）**。曾用 vec0 虚表 + `data_id` 关联；现统一到 `rag_chunks` |
 | **[LlamaIndex.TS](https://github.com/run-llama/llama_index.ts)** | ~44k(含 Py) | TS SDK | ⭐⭐⭐ | **推荐为后续升级**。分层索引（节点/摘要/图谱）+ 自动摘要；偏重，MVP 暂不引入，但其「混合检索 + 摘要」架构是本层的目标形态 |
 | **[LangChain.js](https://github.com/langchain-ai/langchainjs)** | ~90k | TS | ⭐⭐ | 不选。定位是 Agent 编排（本项目已有自己的 Loop），知识库只是其侧支；引入会带来不必要复杂度 |
 | **[ChromaDB](https://github.com/chroma-core/chroma)** | ~16k | Py/JS client | ⭐⭐ | 不选。需独立服务进程，破坏「单库 SQLite」的轻量定位 |
@@ -84,9 +88,9 @@
 | **[@xenova/transformers](https://github.com/xenova/transformers.js)** | ~12k | JS | ⭐⭐⭐⭐ | **推荐为真语义嵌入器**。本地 ONNX 模型（gte-base/all-MiniLM-L6-v2），无需 API Key；MVP 用零依赖 HashEmbedder 兜底，可平滑替换 |
 | **[GraphRAG](https://github.com/microsoft/graphrag)** | ~25k | Py | ⭐⭐ | 不选（Python、重）；但其「实体抽取 + 关系图谱」思路记为知识图谱升级方向 |
 
-**选型理由**：本项目是 TypeScript + SQLite + better-sqlite3 的轻量单库架构。**sqlite-vec** 与现有栈零摩擦（同库、同连接、同事务），是最小代价的向量层；**LlamaIndex.TS** 作为后续「摘要/图谱/自动 compaction」的升级形态；**@xenova/transformers** 作为真语义嵌入器（当前用 HashEmbedder 兜底，接口已留，可平滑注入替换）。
+**选型理由**：本项目是 TypeScript + SQLite + better-sqlite3 的轻量单库架构。当时选 **sqlite-vec** 是因其与现有栈零摩擦；后续发现切块级 RAG（`rag_chunks` + Flat/HNSW/IVF）在召回与持久化上更合适，已统一（见 `docs/KNOWLEDGE_SYSTEM.md` §8）。
 
-### 2.3 实现：`src/knowledge/vectorRecall.ts`（语义召回层，已集成）
+### 2.3 实现：`src/knowledge/vectorRecall.ts`（历史设计；2026-10-24 已统一到 RAG）
 
 **可降级设计**（与 Repository 的 FTS5→LIKE 降级同约定）：
 - ① sqlite-vec 扩展可用 → 真 kNN（vec0 虚表 + 辅助列 `data_id text` 关联 data_items.id）；
@@ -96,11 +100,11 @@
 **关键技术点**（实测踩坑）：
 - sqlite-vec v0.1.9 **不允许显式传 rowid**（报 "Only integers are allowed for primary key values"）→ 改用**辅助列 `data_id text`** 直接存 data_items.id，vec0 自动生成 PK，kNN 返回 data_id 关联回 data_items（已验证可行）；
 - Float32Array ↔ Buffer 用 `writeFloatLE`（小端），维度在建表时固定（默认 256）；
-- `KnowledgeHub.putData` 写数据后同步 upsert 向量（事务外，失败不影响主流程）；`deleteData` 同步 remove；`searchSemantic` / `searchHybrid` 提供语义/混合检索。
+- ~~`KnowledgeHub.putData` 写数据后同步 upsert 向量~~ → 现在只标脏 `rag_chunks` 索引；`searchSemantic` / `searchHybrid` 是 RAG 的兼容包装。
 
-**混合检索**（`searchHybrid`）：关键词(FTS5) ∪ 语义(向量)，按得分融合去重——同条同时命中两路径取 max，`matchedBy` 标注命中来源（keyword/semantic/both）。
+**混合检索**（`searchHybrid`）：RAG 内部 BM25 + 向量 → RRF → rerank；结果按文档去重，`matchedBy` 取整篇文档的来源并集（keyword/semantic/both）。
 
-**测试**：`tests/28_vector_recall.test.ts` — 14 个用例（HashEmbedder 确定性/归一化/相似度、vecToBuffer 往返、语义检索相关性、降级路径、collection 过滤、stats、KnowledgeHub 集成的 putData 自动嵌入/searchSemantic/searchHybrid/deleteData 清理/stats）。全绿。
+**测试**：`tests/28_vector_recall.test.ts`（14 例，旧向量原语 + 统一检索集成）+ `tests/79_rag_unified.test.ts`（8 例，单一写入/三模式/去重/过滤/删除/统计/HTTP/--replace）。全绿。
 
 ### 2.4 升级路径（让知识库「持续成长」的后续步骤）
 
@@ -122,8 +126,8 @@
 | `src/runtime/SubAgentLifecycle.ts` | 子 Agent 生命周期判定器（七条规则 + LRU 驱逐 + 有状态管理器） |
 | `src/agents/specs.ts` | 新增 `retention`（importance/idleTimeoutMs/maxAgeMs）字段 |
 | `src/agents/renderDocs.ts` | 契约文档渲染 retention（第 8 节 + 一览表新列） |
-| `src/knowledge/vectorRecall.ts` | 语义向量召回层（sqlite-vec / 降级 / HashEmbedder） |
-| `src/knowledge/index.ts` | KnowledgeHub 集成 vectorRecall（putData/deleteData 同步向量；searchSemantic/searchHybrid） |
+| `src/knowledge/vectorRecall.ts` | 嵌入原语 + 旧 sqlite-vec 兼容工具（生产检索已统一到 RAG） |
+| `src/knowledge/index.ts` | KnowledgeHub 统一检索入口（searchKnowledge；searchSemantic/searchHybrid 兼容包装） |
 | `tests/27_subagent_lifecycle.test.ts` | 31 用例 |
 | `tests/28_vector_recall.test.ts` | 14 用例 |
 | `agents/*.md` | 重新生成的契约文档（含 retention） |

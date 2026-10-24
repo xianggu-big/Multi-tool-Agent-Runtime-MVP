@@ -4,7 +4,7 @@
 //   - 默认：把 runs（目标+最终答案/失败原因）与 context（多轮对话 turns）写入知识库；
 //   - --dir：额外把指定工作区的文件结构（路径+大小，上限 500 条，跳过 node_modules/.git）写入 collection 'workspace'。
 // 幂等：putData 按 (collection, itemId) 唯一，重复执行是覆盖（会刷新 embedding）。
-// 只读源：不修改 runs/contexts 表，只写入知识库（data_items + data_vec）。
+// 只读源：不修改 runs/contexts 表，只写入知识库（data_items；向量由 RAG 增量索引维护）。
 
 import { loadConfig } from '../src/config.js';
 import { buildRuntime } from '../src/runtime/index.js';

@@ -41,6 +41,11 @@
 | **BF-012** | 10-23 | 契约门禁对动态工具静默失效：`mcp_*` 没有权限映射也能过 lint；`maxRiskLevel` 只写进文档、从未校验 | 接 MCP 后可能漏授权/误放高危工具；文档显示 safe 而实际工具是 high | `validateSpecs` 用 `toolPermission[t]` 后 `filter(Boolean)` 丢掉未知工具；风险字段没有消费点 | ✅ 已验证 | `tests/62a~62c`；Linux `node:24` 容器 `agents:lint` + 全量测试通过 |
 | **BF-013** | 10-23 | 长任务中画面突然卡死、恢复后一次性补出大量内容；服务端其实一直在跑 | 所有长回答/多轮任务，切到事件流页签更严重 | 每条 `llm_delta` 强制 append + 滚动布局；`flushCards` 每帧重写全文；事件列表无上限 | ✅ 代码 + 结构性回归（未做浏览器 Performance 量化） | `tests/59d`、`tests/63a/63b`；服务端 24ms 合并、前端 500 条上限/增量 append/10fps 滚动 |
 | **BF-014** | 10-23 | 远端 CI 在 Node 24.21.0 上 `npm test` 红：原生断言 `RemoveEnvironmentCleanupHook ... Assertion failed: (env) != nullptr`，7 个测试文件被连带判红 | 所有 CI 任务；不是业务断言失败，容易被误判成代码回归 | `better-sqlite3 11.10.0` 的 `Statement` 析构在 Node 24.21 进程退出阶段触发原生断言 | ✅ 已验证 | `.github/workflows/ci.yml` 钉 `node-version: '24.22.0'`；run `39901350247` 全绿（失败 run `39900764434`） |
+| **BF-015** | 10-24 | 定时任务可以传入普通 API 不允许的预算值（负数/超大/非法字符串），绕过统一边界 | 所有定时任务；可能把单次 run 预算放大到无上限 | `parseScheduleRequest` 只检查 `options` 是对象，没有复用 `parseRunLimits` / `parseGenerationParams` 的边界 | ✅ 代码 + 测试 | `tests/69f`；`src/runtime/runLimits.ts` |
+| **BF-016** | 10-24 | 服务默认监听所有网卡且无鉴权，同网段任何人都能创建 run / 读事件 / 调 MCP | 所有默认部署；P2-7 从 2026-10-13 起一直挂着 | Express `app.listen(port)` 未指定 host；HTTP 层没有认证中间件 | ✅ 代码 + 测试 | `tests/73a/73b`；`src/config.ts`、`src/server.ts` |
+| **BF-017** | 10-24 | 无人值守的 MCP destructive 只会硬拒绝，用户事后无法决定是否执行 | 所有定时任务里的 MCP 写操作；能力被直接砍掉 | bridge 在 `autoPolicy` 分支之前就走 `requestApproval`，没有待确认队列分支 | ✅ 代码 + 测试 | `tests/44i`、`tests/74`；`src/mcp/bridge.ts`、`src/runtime/PendingActionService.ts` |
+| **BF-018** | 10-24 | 知识库删空后检索抛 `FlatIndex 查询维度不一致：256 vs 0`，语义/混合检索 500 | 空知识库、或删除最后一条文档后的所有语义/混合查询 | 空索引 `dim=0` 仍校验查询维度；RAG 管线空 chunks 仍执行 embedding + 向量检索 | ✅ 代码 + 测试 | `tests/79e`、`tests/28` 删除用例；`src/knowledge/vectorIndex.ts`、`ragPipeline.ts` |
+| **BF-019** | 10-24 | 新库上 `ingest-docs --replace` 报 `no such table: data_vec`，整个替换事务回滚 | 统一后新建/已清理 `data_vec` 的库；文件删改后无法用 `--replace` 重导 | 事务内无条件 `prepare('DELETE FROM data_vec …')`；旧轨时代 Hub 构造必建表，统一后不再建 | ✅ 代码 + 测试 | `tests/79h`；`scripts/ingest-docs.ts` |
 
 ---
 
@@ -353,7 +358,127 @@ data/edit-eval-real/20261022-130617-398/R11/result.json
 
 **遗留**：样本仍是单文件小函数级修改；下一步扩多文件/跨模块任务。`setup` 只支持字面量替换，若 fixture 再改行尾或格式化，必须继续用「未命中 = invalid」兜底。
 
+### BF-015 定时任务预算可绕过普通 API 边界
+**现象**：普通 `POST /api/runs` 会拒绝负数/超大/非法字符串预算，但 `POST /api/schedules` 的 `options.limits` 只要求是对象；同样的值可以进定时任务，在到点执行时放大预算。生成参数与编排宽度也存在同类“只解析、不校验”的缺口。
+**定位**：`parseScheduleRequest` 里 `options.limits = optRaw.limits`；对比 `validateRunRequest` 调用的 `parseRunLimits`。回归 `tests/69f` 直接断言负数/`'abc'`/超大值必须返回 `options.limits...` 错误。
+**影响面**：所有定时任务；用户以为两套入口边界一致，实际定时任务可以绕过。
+**根因**：预算解析内联在 HTTP 层，定时任务另写了一份宽松版本。
+**修复**：抽出 `src/runtime/runLimits.ts`（严格解析 + 历史脏值收敛）；`parseScheduleRequest` 复用 `parseRunLimits`、`parseGenerationParams`，`maxWidth` 限制到部署上限；执行期 `buildScheduleRunInput` 用 `sanitizeRunLimits` 再收敛一次。
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| 非法预算 | 可进定时任务 | 400 `options.limits...` | `tests/69f` |
+| 非法生成参数 | 不校验 | 400 `options.llm.params...` | `tests/69f` |
+| 编排宽度越界 | 不校验 | 400 `maxWidth` | `tests/69f` |
+| 历史脏记录 | 原样进 Budget | 非法字段丢弃 | `tests/69h` |
+
+**遗留**：没有对 `options.misc.scanLimit` 做同等严格校验（执行期仍有 clamp）。
+
+### BF-016 默认监听所有网卡且无鉴权
+**现象**：`npm start` 后同网段任何设备都能访问 `/api/runs`、读事件、调用 MCP；代码审查 P2-7 从 2026-10-13 起一直标注“仅适合本机”，但服务本身没有阻止。
+**定位**：`src/index.ts` 的 `app.listen(port, cb)` 没有 host；`src/server.ts` 没有认证中间件。
+**影响面**：所有默认部署；写能力开启时还可触发审批/落盘（仍需人工批准，但暴露面不应默认存在）。
+**根因**：本地单用户假设只写在文档里，没有变成启动期约束。
+**修复**：`MTA_HOST` 默认 `127.0.0.1`；`assertHttpSecurity` 在非回环 + 无 ≥32 字符 token 时拒绝启动。HTTP 层支持 Bearer / `x-mta-token` / HttpOnly Cookie；query token 只允许首页一次性引导；`/api/health` 公开；常量时间比较。
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| 默认监听 | 0.0.0.0 | 127.0.0.1 | `tests/73a` |
+| 非回环无 token | 可启动 | 抛 `MTA_AUTH_TOKEN` | `tests/73a` |
+| 未认证 API | 200 | 401 | `tests/73b` |
+| query token 调 API | 可认证 | 401（只允许首页引导） | `tests/73b` |
+
+**遗留**：没有 TLS；Cookie 无 `Secure`；单 token 没有用户/路由级权限。跨机器部署必须放在 HTTPS 反向代理之后。
+
+### BF-017 无人值守 MCP destructive 只能硬拒绝
+**现象**：定时任务里模型调用声明 `destructiveHint=true` 的 MCP 工具时，run 直接失败；用户事后没有“执行/忽略”的机会。
+**定位**：`src/mcp/bridge.ts` 先判断 `ctx.autoPolicy?.enabled` 之外的分支，再走 `requestApproval`；没有 `kind='mcp'` 的待确认记录。
+**影响面**：所有定时任务里的 MCP 写操作（发布、删除远端资源等）。
+**根因**：待确认队列最初只为本地删除/宿主命令设计，payload 结构没有 MCP 分支。
+**修复**：`PendingActionKind` 增加 `mcp`；bridge 在 autoPolicy 下 `createPending({server,tool,args,tainted})` 并返回 `MCP_DEFERRED`；`PendingActionService` 注入 `McpPendingExecutor`，确认后走 `McpClientRuntime.callTool()`（重新校验 server/白名单/ready）。参数 >16k 或含敏感字段 fail-closed；审批摘要与 UI 预览递归脱敏。
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| 定时任务 MCP destructive | 硬拒绝 | 进待确认 | `tests/44i` |
+| 未确认就执行 | — | 拒绝 | `tests/74a` |
+| 重复确认 | — | 拒绝 | `tests/74a` |
+| 含 token 参数 | 可能落库 | `MCP_ARGS_SENSITIVE` 不入队 | `tests/44i`、`tests/74c` |
+
+**遗留**：MCP 待确认执行时无法像删除那样用 `baseHash` 判断参数是否过期；用户需要在执行前自行核对。
+
 ---
+## 6.7 BF-018 知识库删空后检索抛「维度不一致」
+
+**现象**：`deleteData()` 删掉知识库最后一条文档后，`searchSemantic` / `searchHybrid` / `/api/knowledge/search?mode=semantic|hybrid` 抛 `FlatIndex 查询维度不一致：256 vs 0`，接口 500；关键词模式不受影响。
+
+**定位**（内存复现）：
+
+```bash
+node --import tsx --test tests/79_rag_unified.test.ts
+# 修复前：79e 失败，堆栈指向 FlatIndex.search
+```
+
+```
+putData(x) → searchSemantic → 索引 1 chunk（dim=256）
+deleteData(x) → ragCache=null → 下次 searchSemantic 重建空索引（records=[], dim=0）
+FlatIndex.search(qv) 先校验 qv.length(256) !== this.dim(0) → throw
+```
+
+**影响面**：空知识库或「删光某个库」之后的语义/混合检索；会表现为 HTTP 500，而不是正常的空结果。
+
+**根因**：`FlatIndex.dim` 只在 `add()` 时从第一条向量初始化；空索引没有维度概念，却仍执行查询维度校验。`RagPipeline.search` 也没有在 `chunks.length === 0` 时早退，仍然先跑 embedding 再查索引。
+
+**修复**（机制 + 文件）：
+- `src/knowledge/vectorIndex.ts`：`FlatIndex.search` 在 `records.length === 0` 时直接返回 `[]`（HNSW/IVF 原本已有空保护）。
+- `src/knowledge/ragPipeline.ts`：`!q || !chunks.length` 时直接返回空结果，不再调用 embedding。
+
+**修后效果**（表格：验收项 / 修前 / 修后 / 怎么验）：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| 删空后语义检索 | 抛 256 vs 0，500 | 返回 `[]`，HTTP 200 | `tests/79e`（删除后不再召回） |
+| 删空后混合检索 | 同样 500 | 返回 `[]` | `tests/28` 删除用例（搜索不抛） |
+| 空索引直接查询 | 抛维度错误 | `[]` | `tests/79a/79e` 覆盖 |
+
+**遗留 / 未验证**：无；HNSW/IVF 的空索引路径已有保护，Flat 是默认索引。
+
+---
+
+## 6.8 BF-019 `ingest-docs --replace` 在新库上被 `data_vec` 缺失打断
+
+**现象**：统一后新建的库（没有 `data_vec` 表）执行 `npm run ingest:docs -- --dir … --replace`，报 `SqliteError: no such table: data_vec`，整个 `--replace` 事务回滚，新文件也没有导入。
+
+**定位**：
+
+```bash
+SQLITE_PATH=<tmp>/runtime.db node --import tsx scripts/ingest-docs.ts --dir <tmp> --collection docs
+SQLITE_PATH=<tmp>/runtime.db node --import tsx scripts/ingest-docs.ts --dir <tmp> --collection docs --replace
+# 修复前：第二条 exit 1，提示 no such table: data_vec
+```
+
+**影响面**：所有统一后新建的库、以及执行过 `rag:cleanup-legacy --yes` 的库；`--replace` 是文件删改后的推荐路径，失败后旧数据仍在、新内容进不去。
+
+**根因**：`--replace` 在事务里先 `prepare('DELETE FROM data_vec WHERE data_id = ?')`，再进入逐行 `try/catch`。旧轨时代 `KnowledgeHub` 构造 `VectorRecall` 时必然创建 `data_vec`，所以 prepare 不会失败；统一后不再建表，prepare 直接抛错，外层 catch 把整个替换标为失败。
+
+**修复**（机制 + 文件）：
+- `scripts/ingest-docs.ts`：先查 `sqlite_master`，只有 `data_vec` 存在才 prepare；执行处改 `delVec?.run()`，旧库仍可顺带清理。
+- 同一处继续显式调用 `knowledge.ragStore.removeDocs(rows ids)`，保证 `rag_chunks` 不残留。
+
+**修后效果**：
+
+| 验收项 | 修前 | 修后 | 怎么验 |
+|---|---|---|---|
+| 新库 `--replace` | exit 1，回滚 | exit 0，条目数保持 1 | `tests/79h`（临时库实跑脚本） |
+| 旧库 `--replace`（有 `data_vec`） | 可执行 | 兼容分支保留（`hasLegacyVec=true` 时逐个删） | 代码审查；未单独造“有数据旧库”用例 |
+| 替换后旧块残留 | — | `rag_chunks` 按 docId 删除 | `ragStore.removeDocs` + `tests/79h` |
+
+**遗留 / 未验证**：`--replace` 只删同 collection 的块；跨 collection 的旧块由下次增量同步按 `doc_hash` 清理。有数据的旧 `data_vec` 清理分支尚未单独造用例（逻辑为原路径保留）。
+
+---
+
 ## 7. 每次复盘要回答的三个问题
 
 > 这张表的价值不在"修了什么"，而在**下次能不能更早发现**。定期复盘时对每个新条目回答：

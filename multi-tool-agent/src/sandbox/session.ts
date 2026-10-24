@@ -30,7 +30,7 @@ const SNAPSHOT_EXCLUDE = new Set(['node_modules', 'data', '.git', '.workbuddy', 
  * 而 `run_command` 的 bash 预演是**容器内真跑**（`cat .env` 即可打印内容并进模型上下文）——
  * 读工具层的 `isSensitive` 拒读（read_file/list_files/search_files）因此被沙箱绕过。
  */
-function isSnapshotExcluded(name: string): boolean {
+export function isSnapshotExcluded(name: string): boolean {
   if (SNAPSHOT_EXCLUDE.has(name)) return true;
   return /^\.env(\.|$)/.test(name) && !/\.example$/.test(name);
 }
@@ -113,7 +113,7 @@ export interface SandboxOptions {
 }
 
 export type ChangeOp = 'create' | 'edit' | 'delete';
-export type ChangeStatus = 'staged' | 'verified' | 'approved' | 'applied' | 'denied' | 'rolled_back';
+export type ChangeStatus = 'staged' | 'verified' | 'approved' | 'applied' | 'denied' | 'rolled_back' | 'deferred';
 
 export interface ChangeRecord {
   relPath: string;
@@ -184,6 +184,10 @@ export class SandboxSession {
   private repoCopyDir(): string {
     return join(this.dir(), 'repo');
   }
+  /** Codex 稳定工作副本的宿主路径（写模式把它当 Codex 的 cwd） */
+  copyDir(): string {
+    return this.repoCopyDir();
+  }
   private workDir(): string {
     return join(this.dir(), 'work');
   }
@@ -211,6 +215,8 @@ export class SandboxSession {
     }
     // 快照（排除 node_modules/data/.git/工具状态）——宿主副本同时充当"pre-state"（可回滚）
     // （自实现递归拷贝：dest 位于 `<repo>/data/` 内时 fs.cpSync 会抛 "subdirectory of self"，见函数注释）
+    // Codex 稳定工作副本会跨 run 复用：先清空旧副本，避免已从仓库删除的文件残留在副本里。
+    await rm(this.repoCopyDir(), { recursive: true, force: true });
     await copyRepoSnapshotAsync(this.opts.repoPath, this.repoCopyDir());
     // 容器：先清同名（上次崩溃残留）→ 起 → 快照进 /work（镜像内 node_modules 保留）
     await rmContainerAsync(this.name);
@@ -399,15 +405,35 @@ export class SandboxSession {
   /** L1：tsc --noEmit --incremental（容器内持久 tsbuildinfo）+ 受影响测试（找不到映射 → 全量兜底） */
   private async runL1(signal?: AbortSignal, opts: { includeTests?: boolean } = {}): Promise<LadderStep[]> {
     const steps: LadderStep[] = [];
-    const tsc = await execInAsync(
-      this.name,
-      ['npx', 'tsc', '-p', 'tsconfig.json', '--noEmit', '--incremental', '--tsBuildInfoFile', '/tmp/mta-tsc/tsbuildinfo', '--pretty', 'false'],
-      { timeoutMs: 180_000, workdir: '/work', signal },
-    );
-    const tscVerdict = classify({ source: 'l1-tsc', exitCode: tsc.exitCode, stdout: tsc.stdout, stderr: tsc.stderr, timedOut: tsc.timedOut });
-    steps.push({ source: 'l1-tsc', verdict: tscVerdict });
-    if (!tscVerdict.ok) return steps;
+    // 非 TS 仓库（无 tsconfig.json）不能跑 tsc：否则任何改动都会被 TS5058 误判为失败。
+    // 与 verificationPlan 的降级口径一致：没有类型检查入口 → 明确跳过并标注。
+    if (!existsSync(join(this.repoCopyDir(), 'tsconfig.json'))) {
+      steps.push({ source: 'l1-tsc', verdict: { ok: true, summary: '无 tsconfig.json，跳过类型检查' } });
+    } else {
+      const tsc = await execInAsync(
+        this.name,
+        ['npx', 'tsc', '-p', 'tsconfig.json', '--noEmit', '--incremental', '--tsBuildInfoFile', '/tmp/mta-tsc/tsbuildinfo', '--pretty', 'false'],
+        { timeoutMs: 180_000, workdir: '/work', signal },
+      );
+      const tscVerdict = classify({ source: 'l1-tsc', exitCode: tsc.exitCode, stdout: tsc.stdout, stderr: tsc.stderr, timedOut: tsc.timedOut });
+      steps.push({ source: 'l1-tsc', verdict: tscVerdict });
+      if (!tscVerdict.ok) return steps;
+    }
     if (opts.includeTests === false) return steps;
+
+    // 没有 tests/ 且 package.json 无 test 脚本 → 跳过（宿主复验会再判定；不阻断落盘）
+    const hasTestsDir = existsSync(join(this.repoCopyDir(), 'tests'));
+    let hasTestScript = false;
+    try {
+      const pkg = JSON.parse(readFileSync(join(this.repoCopyDir(), 'package.json'), 'utf8')) as { scripts?: { test?: unknown } };
+      hasTestScript = typeof pkg?.scripts?.test === 'string' && !!pkg.scripts.test.trim();
+    } catch {
+      /* 无 package.json 视为没有测试入口 */
+    }
+    if (!hasTestsDir && !hasTestScript) {
+      steps.push({ source: 'l1-tests', verdict: { ok: true, summary: '无 tests/ 目录且 package.json 无 test 脚本，跳过测试' } });
+      return steps;
+    }
 
     const affected = this.affectedTests([...this.changes.keys()].filter((k) => this.changes.get(k)!.op !== 'delete'));
     const target = affected.length ? affected : null; // null = 全量兜底（v3-4：绝不允许"找不到映射=不跑测试"）
