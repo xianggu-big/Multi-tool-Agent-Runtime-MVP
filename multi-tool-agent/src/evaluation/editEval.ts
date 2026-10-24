@@ -54,6 +54,8 @@ export interface EditEvalCaseResult {
   postFiles: Record<string, string | null>;
   assertions: EditEvalAssertion[];
   notes: string[];
+  /** R 系列场景的返工轨迹（E 系列为 undefined）。 */
+  repair?: EditEvalRepairTrace;
   /** 确定性场景没有模型调用；保留字段是为了以后接真实模型时同一份报告能容纳。 */
   tokens: number;
   costUsd: number;
@@ -80,6 +82,64 @@ export interface EditEvalSummary {
   tokens: number;
   costUsd: number;
   failureClasses: Array<{ key: string; count: number }>;
+}
+
+// ---------------------------------------------------------------- R-Loop（复验驱动返工环）Phase 0 尺子
+//
+// 设计见 reports/REPAIR_LOOP_PLAN.md。判定语义在这里定死（纯函数、可单测），
+// Phase 1 运行时返工环必须复用同一语义；eval:edit 的 R 系列场景按它驱动多轮 submit。
+
+/** 单轮返工的结果摘要。 */
+export interface RepairRoundOutcome {
+  /** 本轮沙箱验证是否通过（只看验证，不含审批/落盘——R5 证明审批是环外的人闸）。 */
+  ok: boolean;
+  /**
+   * 失败签名：首个失败检查的 `source: summary`。
+   * Phase 1 计划升级为「失败测试名集合」（见 REPAIR_LOOP_PLAN §8 的边界声明）；
+   * Phase 0 用它即可保证同错误重交时签名逐字相同、不同错误源（语法 vs 测试）签名不同。
+   */
+  failureKey?: string;
+}
+
+export interface RepairLoopOptions {
+  /** 轮次上限（MTA_REPAIR_MAX_ROUNDS 语义；0=返工环关闭，首轮都不跑）。 */
+  maxRounds: number;
+  /** run 级预算是否还允许再跑一轮（Phase 1 接 runLimits；耗尽必须诚实中止，不新开预算口子）。 */
+  budgetAvailable: boolean;
+}
+
+export type RepairDecision =
+  | { action: 'retry' }
+  | { action: 'done' }
+  | { action: 'abort'; reason: 'max_rounds' | 'budget' }
+  | { action: 'cutoff'; reason: 'same_error' };
+
+/**
+ * 判定下一轮动作。优先级（从左到右短路）：
+ * 本轮已绿（收尾进审批——maxRounds 只管「还要不要再跑一轮」，不把成功误标为失败）
+ * → 轮次达上限（含 0=关闭）→ 预算耗尽（首轮/返工轮都受预算管）→ 尚未跑过轮（放行首轮）
+ * → 相邻两轮同失败签名（熔断，未消耗轮次不再执行）→ 继续。
+ */
+export function decideRepair(history: RepairRoundOutcome[], opts: RepairLoopOptions): RepairDecision {
+  const last = history[history.length - 1];
+  if (last?.ok) return { action: 'done' };
+  if (history.length >= opts.maxRounds) return { action: 'abort', reason: 'max_rounds' };
+  if (!opts.budgetAvailable) return { action: 'abort', reason: 'budget' };
+  if (!last) return { action: 'retry' };
+  const prev = history[history.length - 2];
+  if (prev && !prev.ok && prev.failureKey !== undefined && prev.failureKey === last.failureKey) {
+    return { action: 'cutoff', reason: 'same_error' };
+  }
+  return { action: 'retry' };
+}
+
+/** R 系列场景写入证据与报告的返工轨迹。 */
+export interface EditEvalRepairTrace {
+  maxRounds: number;
+  budgetRounds?: number;
+  roundsExecuted: number;
+  decisions: Array<{ beforeRound: number; action: string; reason?: string }>;
+  history: Array<{ round: number; ok: boolean; failureKey?: string; errorCode?: string }>;
 }
 
 export function classifyEditOutcome(r: Pick<EditEvalCaseResult, 'applied' | 'rolledBack' | 'errorCode'>): EditEvalExpected | 'unknown' {
@@ -182,6 +242,7 @@ export function renderEditEvalReport(meta: EditEvalReportMeta, results: EditEval
   lines.push('- **不是模型能力评测**：场景由脚本确定性驱动（脚本扮演模型提出改动），所以 tokens = 0、cost = $0；不要把它解读成“模型改代码成功率”。');
   lines.push('- 每个场景使用独立临时仓库副本；不污染 `demo/codebase-sample`，也不写入用户真实仓库。');
   lines.push('- 沙箱内是 Linux、宿主是当前平台；E6 专门验证“沙箱绿、宿主红”时是否自动回滚。');
+  lines.push('- R 系列场景是「复验驱动返工环（R-Loop）」的 Phase 0 尺子：脚本按 `decideRepair` 驱动多轮 submit_changes（返工发生在审批前的沙箱内，人闸不动）；失败签名 = 首个失败检查的 source+summary（Phase 1 计划升级为失败测试名集合）。');
   if (meta.notes?.length) for (const n of meta.notes) lines.push(`- ${n}`);
   lines.push('');
   lines.push('## 2. 环境');
@@ -248,6 +309,11 @@ export function renderEditEvalReport(meta: EditEvalReportMeta, results: EditEval
     }
     if (r.host) {
       lines.push(`- 宿主复验：${r.host.ran ? (r.host.ok ? '通过' : '失败') : '未运行'}${r.host.mode ? `（mode=${r.host.mode}, coverage=${r.host.coverage ?? '—'}）` : ''}`);
+    }
+    if (r.repair) {
+      lines.push(`- 返工环：maxRounds=${r.repair.maxRounds}${r.repair.budgetRounds != null ? `，budgetRounds=${r.repair.budgetRounds}` : ''}；实际执行 ${r.repair.roundsExecuted} 轮`);
+      for (const d of r.repair.decisions) lines.push(`  - 决策（第 ${d.beforeRound} 轮前）：${d.action}${d.reason ? `/${d.reason}` : ''}`);
+      for (const h of r.repair.history) lines.push(`  - 第 ${h.round} 轮：${h.ok ? '绿' : `红（${h.failureKey ?? h.errorCode ?? '未知'}）`}`);
     }
     if (r.assertions.length) {
       lines.push('- 断言：');

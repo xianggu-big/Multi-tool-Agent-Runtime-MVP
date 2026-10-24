@@ -95,7 +95,8 @@
 | **首跑自检** | Node 24 / 宿主 Node / sqlite-vec / 数据目录 / 端口 / Docker 镜像 / Key；有 fail 退出 1 | `npm run doctor`；`tests/54`（6 例） |
 | **复盘摘要覆盖** | 每次终态 1 条（DB + JSONL + 事件）；**成功也写**、失败优先；历史 run 不回填 | `tests/56`（5 例）；`npm run digest:list` |
 | **复盘 / 压缩面板** | 前端「复盘」页签：问题优先筛选、摘要详情、过程问题聚合、压缩观测（水位/来源/窗口/触顶）；本机 Edge headless + CDP 实测 | `tests/59`（3 例）；`public/index.html` |
-| **编辑管线评测** | 7/7 命中预期；5 次审批 / 4 文件落盘 / 1 回滚；沙箱 5/7 通过（E3/E4 故意失败）、宿主 2/3；平均 12.7s / P95 14.1s；tokens=0 | `npm run eval:edit`；`reports/EDIT_EVAL.md`（2026-10-22 重跑） |
+| **编辑管线评测** | 12/12 命中预期（E1~E7 基线 + R1~R5 返工环）；7 次审批 / 5 文件落盘 / 1 回滚；平均 13.0s / P95 15.1s；tokens=0 | `npm run eval:edit`；`reports/EDIT_EVAL.md`（2026-10-24 重跑） |
+| **R-Loop 返工环（Phase 0 尺子）** | R1 首轮红→返工绿后审批仍出现并落盘；R2 两轮全红→轮次上限拦下第 3 轮；R3 相邻同错误→熔断（cutoff/same_error）；R4 预算耗尽→诚实中止；R5 返工绿后拒绝审批→不落盘；判定函数 `decideRepair` 单测 10 例（tests/80） | `npm run eval:edit`；`reports/REPAIR_LOOP_PLAN.md`（Phase 1/2 待开工） |
 | **真实模型编辑评测** | 26/26 通过；L2 26/26；26 次审批；20 引导 / 4 盲测 / 2 多文件；833,082 tokens / \$0.0248 / 平均 22.7s；单轮 95% Wilson 下界 **87.1%**（DeepSeek Flash） | `npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000`；`reports/EDIT_EVAL_REAL.md` + `EDIT_EVAL_REAL_EVIDENCE.json` |
 | **写能力 UI 链路（真实模型，M1'）** | 界面语义（`orchestration.allowWriteSpecs=true`，不带白名单）→ 派发 code-edit → 沙箱建文件 → **审批卡** → `allow_once` → **落盘 + `hostVerify{ran:true,ok:true}`**（run_mvanz941_6f0f72ff） | `.eval/m1-e2e-out/EVIDENCE.md`「M1'」节；`reports/CHANGELOG.md` 2026-10-16 M1' |
 | 沙箱阶梯（真 Docker） | 容器内 L0 语法 + L1 `tsc --incremental` + 全量测试兜底：**17.1s / 全绿**；容器内套件 269 pass / 1 skip（Docker 用例在容器内无守护进程）/ 0 fail | `.eval/m1-ladder-probe.mjs`、`tests/40` |
@@ -184,7 +185,7 @@
 | M13 | **单 run 报告生成器**：流程图（Mermaid）+ 分层量化 + 六阶段错误归因（`npm run report:run` / `GET /api/runs/:id/report`） | `src/report/`、`scripts/gen-run-report.ts`；实测 322 份；279 测试全绿 |
 | M14 | **写能力 UI 化（M1'）**：`allowWriteSpecs` 完整接线（catalog / ToolContext / delegate 守卫 / spawn 兜底）+ 界面「允许修改文件」开关 + 修改意图确认对话框 + 审批卡滚动高亮 | `src/`、`public/index.html`、`tests/42_write_gate.test.ts`；285 测试全绿；UI 链路真机实测 |
 | M15 | **异步沙箱 + L1/L2 验证闭环**：`spawnAsync` 全链路、手动/严格 L2、验证状态机与取消、证据事件、UI 验证面板 | `src/sandbox/{exec,hostVerify}.ts`、`src/runtime/VerificationService.ts`、`tests/49`/`50`；334 测试全绿 |
-| M16 | **可复现编辑管线评测**：独立 fixture + 真 Docker 沙箱 + 真审批 + 宿主复验/回滚 + TOCTOU；7 个确定性场景 7/7；`npm run eval:edit` 生成 `reports/EDIT_EVAL.md` | `scripts/edit-eval.ts`、`src/evaluation/editEval.ts`、`eval/edit-fixture/`、`tests/55`；当轮 370 测试全绿（现总量见头部） |
+| M16 | **可复现编辑管线评测**：独立 fixture + 真 Docker 沙箱 + 真审批 + 宿主复验/回滚 + TOCTOU；12 个确定性场景 12/12（E1~E7 基线 + R1~R5 返工环，2026-10-24 扩）；`npm run eval:edit` 生成 `reports/EDIT_EVAL.md` | `scripts/edit-eval.ts`、`src/evaluation/editEval.ts`、`eval/edit-fixture/`、`tests/55`、`tests/80`；当轮 370 测试全绿（现总量见头部） |
 | M17 | **高危审批二次确认**：`approvalRisk` 统一风险判定；删除 / 宿主命令批准需 `confirmHighRisk`（Runtime fail-closed + HTTP 400）；前端未勾选时锁定批准按钮，拒绝始终可用；事件记录风险原因与 `highRiskConfirmed` | `src/security/approvalRisk.ts`、`AgentRuntime.ts`、`server.ts`、`public/index.html`、`tests/53k/l/m`；373 测试全绿 |
 | M18 | **上下文压缩切点对齐**（2026-10-20，修真实 400）：`compactMessages` 不再按固定条数硬切，切点必须落在轮次边界，杜绝「孤儿 tool 消息」导致 OpenAI 兼容接口 400、整 run 报废 | `src/runtime/AgentRuntime.ts`（`alignCompactCut`）、`tests/33e/33f/33g`；377 测试全绿 |
 | M19 | **模型失败补齐 `source:"provider"` 错误报告**（2026-10-20）：provider catch 现在走 `ErrorReporter` 三落点，context 带 `status/step/messageCount/toolCount/contextUseRatio/suspect`；`MODEL_ERROR` 的 hint 改为「先判断是消息序列还是 Key/网络」；400 事故写入 `docs/ERROR_REPORTING.md` §1.4 | `src/runtime/{AgentRuntime,errorReporter}.ts`、`tests/24d/24d2`、`docs/ERROR_REPORTING.md`；377 测试全绿 |
@@ -208,7 +209,7 @@ npm run typecheck        # 类型检查（应 0 错误）
 npm test                 # 全量测试（当前 422 子测试 / 422 通过 / 0 跳过 / 0 失败；Docker 已启动，40j 真跑）
 npm run agents:lint      # 契约门禁：自校验 + 文档漂移 + 工具存在性
 npm run digest:list      # 每次 run 的复盘摘要（默认只看有问题的：非 completed 或过程出过错）
-npm run eval:edit        # 编辑管线评测（7 场景；需 Docker + mta-sandbox:node24，约 80s）→ reports/EDIT_EVAL.md
+npm run eval:edit        # 编辑管线评测（12 场景：E1~E7 基线 + R1~R5 返工环；需 Docker + mta-sandbox:node24，约 160s）→ reports/EDIT_EVAL.md
 npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000  # 真实模型编辑（20 引导 + 4 盲测 + 2 多文件；需 Docker + DEEPSEEK_API_KEY，约 $0.03）→ reports/EDIT_EVAL_REAL.md
 npm run eval:compaction # 上下文压缩 A/B（30 run，需 DEEPSEEK_API_KEY，约 $0.03）→ reports/COMPACTION_AB.md
 npm run security:redteam # 提示注入红队（42 样本；无需 Key）→ reports/INJECTION_REDTEAM.md
@@ -263,7 +264,8 @@ curl -s "http://localhost:3000/api/errors?view=summary"   # 高频错误聚合�
 | **`reports/RAG_ABLATION.md`**（生成物） | 想看 chunk 大小/overlap 与 embedding 维度的消融：为什么是 512/64、其他配置差多少；`npm run rag:ablation` |
 | **`reports/RAG_IMPROVEMENT_2026-10-23.md`**（方案，人写，只读） | 想提升 RAG 命中率之前：先看为什么现有 94.4% 是虚高（评测集偏袒字面匹配）、六条提升路线与三层指标（Recall/MRR/nDCG/Faithfulness/Abstain）、生成侧提示词、本机跑 R1 蒸馏版的可行性 |
 | **`reports/COMPACTION_AB.md`**（生成物） | 想看滚动摘要 vs legacy 的真实 A/B：30 run、4K 模拟窗口、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论 `not_proven`，不要外推 |
-| **`reports/EDIT_EVAL.md`**（生成物） | 想看编辑闭环是否按设计工作：真 Docker 拦截/审批/落盘/宿主回滚/TOCTOU；`npm run eval:edit` |
+| **`reports/EDIT_EVAL.md`**（生成物） | 想看编辑闭环是否按设计工作：真 Docker 拦截/审批/落盘/宿主回滚/TOCTOU + 返工环 R1~R5；`npm run eval:edit` |
+| **`reports/REPAIR_LOOP_PLAN.md`**（方案，人写） | 想看「验证失败后自动返工」的设计与尺子：审批前沙箱内返工环（人闸不动 / 轮次上限 / 同错误熔断 / 预算诚实中止）、Phase 0 已实测 12/12、Phase 1（运行时）/2（真模型 A/B）待开工 |
 | **`reports/EDIT_EVAL_REAL.md`**（生成物） | 想看真实模型能否在该管线里改对：26 条（20 引导 + 4 盲测 + 2 多文件）、L2、tokens/成本/耗时；`npm run eval:edit:real`。仍不覆盖大型重构/HTTP 人工审批全链路 |
 | **`reports/INJECTION_REDTEAM.md`**（生成物） | 想看提示注入检测的真实检出/误报与已知缺口：42 条样本、漏检 m21/m22、误报 b19/b20；`npm run security:redteam` |
 | **`reports/PROVIDER_BENCHMARK.md`** | 想换 Provider：现状（DeepSeek 已实测）+ 各家逐条复现命令 |

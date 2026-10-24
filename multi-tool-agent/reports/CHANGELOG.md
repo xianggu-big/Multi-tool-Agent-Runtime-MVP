@@ -90,6 +90,24 @@
 
 ## 2026-10-24
 
+### R-Loop 返工环 Phase 0：先定返工尺子（eval:edit 扩到 12 场景，0 token）
+
+**为什么**：审核评测机制对照（项目 vs 市面前沿）的差距分析结论——部署期兜底（沙箱 + 审批 + 复验回滚）已对齐业界，唯一「低成本高收益」缺口是 **agentic self-repair**：验证失败后自动带结构化证据返工，而不是拦截后靠人重试。按「先定尺子后动刀」的哲学，本轮只落评测层与判定纯函数，运行时（Phase 1）等复审后再动。
+
+**做了什么**：
+- 新增判定函数 `decideRepair`（`src/evaluation/editEval.ts`，纯函数、可单测）：优先级 = **绿收尾 → 轮次上限 → 预算 → 首轮放行 → 相邻同错误熔断 → 继续**；设计文档 `reports/REPAIR_LOOP_PLAN.md`（三条铁律：人闸不动 / fail-closed 有上限 / 如实上报）。
+- `scripts/edit-eval.ts` 新增 R1~R5 五个确定性返工场景（脚本按判定函数驱动多轮 `submit_changes`，返工发生在审批前的沙箱内；失败签名 = 首失败检查的 `source: summary`，同错误重交签名逐字相同、语法错 vs 测试错天然可区分）：
+  - **R1** 首轮红 → 返工绿：`repaired@1`，审批卡仍出现并落盘（人闸不动）；
+  - **R2** 两轮全红（签名不同：l1-tests vs l0-syntax）→ maxRounds=2 拦下本可修好的第 3 轮（abort/max_rounds）；
+  - **R3** 相邻两轮同错误（同签名重交）→ 第 3 轮不执行（cutoff/same_error）；
+  - **R4** 预算中途耗尽（budgetRounds=1）→ 诚实中止，无部分落盘（abort/budget）；
+  - **R5** 返工绿后拒绝审批 → `APPROVAL_DENIED` 不落盘（返工不自动放行）。
+- 单元回归 `tests/80_repair_loop.test.ts`（10 例，钉死判定优先级，不连 Docker）。
+
+**验证**：`npm run eval:edit` **12/12 命中**（E1~E7 + R1~R5；7 次审批 / 5 文件落盘 / 1 回滚 / 平均 13.0s / P95 15.1s / 0 token）；`npm test` **80 文件 / 500 子测试 / 500 通过 / 0 跳过 / 0 失败（约 20s）**；`typecheck` 0 错误；`agents:lint` 三项通过。
+
+**边界**：Phase 0 衡量的是返工环**机制**（真沙箱 + 真验证器 + 真审批回调），不是模型自我修复智力；`MTA_REPAIR_MAX_ROUNDS` 是 Phase 1 计划参数，本轮未进 `config.ts`（不入参数总表）；Phase 1 要点：编排者是运行时不给模型验证工具、每轮先恢复 base 快照、失败证据 ≤8KB、`run_digest.repair` 如实上报。
+
 ### 压测报告复核修正：429/SSE 两节由"未验证"补为实测（报告修订 + 补测探针）
 
 **为什么现在做**：复核 `reports/API_LOAD_TEST_2026-10-24.md` 发现两处方法学缺陷：① POST 压测总共只发 60 个请求（< `MAX_ACTIVE_RUNS` 默认 64），429 写入上限在测试设计上就不可能触发，但报告写成"0%（含 429/400 拦截路径均符合预期）"，属误导性表述；② SSE 用已完成 run 测（回放 <1s、连接交错关闭），对"上限是否生效"信息量为零，且未说明回放连接同样计入上限（`server.ts:1317` 在回放前检查并计数）。

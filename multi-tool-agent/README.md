@@ -36,7 +36,7 @@ npm start
 # 8) 实时流式链路冒烟（真实 HTTP + SSE，打印每帧明细与延迟统计）
 npm run smoke:stream
 # 9) 可选评测（编辑管线需 Docker；红队不需要 Key）
-npm run eval:edit          # 7 个编辑管线场景 → reports/EDIT_EVAL.md
+npm run eval:edit          # 12 个编辑管线场景（E1~E7 基线 + R1~R5 返工环）→ reports/EDIT_EVAL.md
 npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000  # 26 条真实模型任务（20 引导 + 4 盲测 + 2 多文件；需 Docker + DEEPSEEK_API_KEY，约 $0.03）→ reports/EDIT_EVAL_REAL.md
 npm run eval:compaction    # 上下文压缩 A/B（30 run；需 DEEPSEEK_API_KEY，约 $0.03）→ reports/COMPACTION_AB.md
 npm run security:redteam   # 42 条注入样本 → reports/INJECTION_REDTEAM.md
@@ -319,7 +319,8 @@ docs/                      # ARCHITECTURE / DESIGN_DECISIONS / DEMO / TEST_REPOR
 - `reports/RAG_IMPROVEMENT_2026-10-23.md` —— **RAG 命中率提升方案**（人写，只读）：为什么 vector 单路只有 55.6%（embedding 是词法哈希 + 评测集偏袒字面匹配）、六条提升路线（重建评测集 → 换 bge embedding → 多查询 → cross-encoder rerank → pre-filter → small-to-big）、三层指标清单与诊断映射、生成侧提示词、本机跑 R1 蒸馏版的可行性。
 - `reports/COMPACTION_AB.md` —— **上下文压缩 A/B**（生成物）：rolling vs legacy 的 30 run 真实模型对照、质量/效率/压缩次数与预注册判定；`npm run eval:compaction`。当前结论是 `not_proven`，不要外推成“滚动摘要更优”。
 - `reports/MCP_WRITE_E2E.md` —— **两条真实端到端证据**（人写）：`npm run mcp:e2e`（模型自主调用 MCP 工具）与 `npm run e2e:write`（HTTP → 沙箱 → 人工审批 → 落盘 → 宿主复验）的 token/耗时/事件、暴露的摩擦与边界。
-- `reports/EDIT_EVAL.md` —— **编辑管线评测**（生成物）：真 Docker + 真审批 + 真落盘 + 宿主复验/回滚，7 个确定性场景；`npm run eval:edit`。**注意：衡量管线，不是模型编辑智力**。
+- `reports/EDIT_EVAL.md` —— **编辑管线评测**（生成物）：真 Docker + 真审批 + 真落盘 + 宿主复验/回滚，12 个确定性场景（E1~E7 基线 + R1~R5 返工环）；`npm run eval:edit`。**注意：衡量管线，不是模型编辑智力**。
+- `reports/REPAIR_LOOP_PLAN.md` —— **复验驱动返工环（R-Loop）设计 + Phase 0 尺子**（人写方案）：审批前沙箱内返工（人闸不动 / fail-closed 有上限 / 同错误熔断 / 如实上报）；Phase 0 已落地（eval:edit R1~R5，判定函数 `decideRepair` 在 `src/evaluation/editEval.ts`、单测 tests/80）；Phase 1（运行时）/2（真模型 A/B）待开工。
 - `reports/EDIT_EVAL_REAL.md` —— **真实模型编辑评测**（生成物）：26 条任务（20 引导 + 4 盲测 + 2 多文件），Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；当前 **26/26（L2 26/26）**、833,082 tokens / $0.0248，单轮 95% Wilson 下界 **87.1%**；逐任务脱敏证据在 `reports/EDIT_EVAL_REAL_EVIDENCE.json`。`npm run eval:edit:real -- --tasks=26 --budget-usd=1 --timeout-ms=240000`。**不外推大型重构或需要人工澄清的需求**。
 - `reports/INJECTION_REDTEAM.md` —— **提示注入红队评测**（生成物）：42 条恶意/正常/已知缺口样本；当前恶意检出 20/22、正常误报 2/20；`npm run security:redteam`。**是启发式降风险，不是防住注入**。
 - `reports/PROVIDER_BENCHMARK.md` —— **Provider 横评**（人写）：DeepSeek 已实测，其余家有 Key 再补测回填。

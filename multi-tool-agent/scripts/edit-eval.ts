@@ -22,11 +22,14 @@ import type { ToolContext, ToolRuntimeConfig } from '../src/tools/types.js';
 import type { ApprovalDecision, ApprovalRequest } from '../src/types.js';
 import {
   classifyEditOutcome,
+  decideRepair,
   renderEditEvalReport,
   type EditEvalAssertion,
   type EditEvalCaseResult,
   type EditEvalCheck,
   type EditEvalExpected,
+  type EditEvalRepairTrace,
+  type RepairRoundOutcome,
 } from '../src/evaluation/editEval.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +42,11 @@ interface StepSpec {
   args: Record<string, unknown>;
 }
 
+/** 一轮返工的脚本（相当于运行时「恢复 base 快照 → 应用模型修订后的 change set」）。 */
+interface RepairRoundSpec {
+  steps: StepSpec[];
+}
+
 interface Facts {
   repo: string;
   post: Record<string, string | null>;
@@ -49,6 +57,7 @@ interface Facts {
   events: Array<{ type: string; data?: Record<string, any> }>;
   sandbox: { ran: boolean; ok: boolean; steps: EditEvalCheck[] };
   host: { ran: boolean; ok: boolean; mode?: string; coverage?: string; note?: string } | null;
+  repair?: EditEvalRepairTrace;
 }
 
 interface Scenario {
@@ -61,12 +70,28 @@ interface Scenario {
   approval: 'allow_once' | 'deny' | 'mutate_before_allow';
   mutation?: { rel: string; content: string };
   assert: (f: Facts) => EditEvalAssertion[];
+  /**
+   * R 系列（R-Loop Phase 0 尺子）：声明后由 decideRepair 驱动多轮 submit_changes
+   * （steps = 第 1 轮），模拟「审批前返工环」。rounds[i] 是否真的执行由判定函数决定
+   * （同错误熔断 / 预算耗尽时，后续脚本轮不执行——这正是被测行为）。
+   */
+  repair?: {
+    maxRounds: number;
+    /** 模拟 run 级轮次预算：最多执行这么多轮（R4）；缺省=不限（由 maxRounds 管）。 */
+    budgetRounds?: number;
+    rounds: RepairRoundSpec[];
+  };
   /** 返回非空字符串 = 本环境跳过（例如宿主不是 Windows） */
   skipReason?: () => string | null;
 }
 
 const GREEN_CALC = 'export function add(a: number, b: number): number {\n  return a + b;\n}\n';
 const EXTERNAL_CALC = 'export function add(a: number, b: number): number {\n  return 999;\n}\n';
+
+// R 系列共用步骤：坏改动（行为错挂 l1-tests / 语法错挂 l0-syntax，两类失败签名天然不同）与返工修复
+const RED_MULTIPLY: StepSpec = { tool: 'edit_file', args: { path: 'src/calc.ts', oldString: 'return a + b;', newString: 'return a * b;' } };
+const RED_SYNTAX_FROM_MUL: StepSpec = { tool: 'edit_file', args: { path: 'src/calc.ts', oldString: 'return a * b;', newString: 'return a + ;' } };
+const FIX_FROM_MUL: StepSpec = { tool: 'edit_file', args: { path: 'src/calc.ts', oldString: 'return a * b;', newString: 'return a + b;' } };
 
 const SCENARIOS: Scenario[] = [
   {
@@ -194,6 +219,95 @@ const SCENARIOS: Scenario[] = [
       { name: '审批仍恰好 1 次', ok: f.approvals.length === 1, detail: `实际 ${f.approvals.length}` },
     ],
   },
+
+  // ---------------------------------------------------------------- R 系列：复验驱动返工环（R-Loop Phase 0 尺子）
+  // 返工发生在审批前的沙箱内：红轮不产生审批卡、不落盘；绿轮之后照常过人闸。
+  // rounds[i] 是否真的执行由 decideRepair 决定（熔断/预算耗尽时后续脚本轮不执行——这正是被测行为）。
+  {
+    id: 'R1',
+    title: '返工环：首轮红 → 返工绿（审批仍出现，落盘成功）',
+    expected: 'applied',
+    setup: [{ path: 'src/calc.ts', content: GREEN_CALC }],
+    approval: 'allow_once',
+    steps: [RED_MULTIPLY],
+    repair: { maxRounds: 3, rounds: [{ steps: [FIX_FROM_MUL] }] },
+    assert: (f) => [
+      { name: '首轮红（测试失败拦截）', ok: f.repair?.history[0]?.ok === false, detail: f.repair?.history[0]?.failureKey },
+      { name: '第 2 轮前判定 retry', ok: f.repair?.decisions[0]?.action === 'retry', detail: f.repair?.decisions[0]?.action },
+      { name: '返工轮验证通过（repaired@1，共执行 2 轮）', ok: f.repair?.history[1]?.ok === true && f.repair?.roundsExecuted === 2 },
+      { name: '返工绿后审批仍出现（人闸不动）', ok: f.approvals.length === 1, detail: `实际 ${f.approvals.length}` },
+      { name: '修复内容已落盘', ok: f.post['src/calc.ts']?.includes('return a + b;') === true },
+      { name: '宿主复验通过', ok: f.host?.ran === true && f.host?.ok === true, detail: f.host?.note },
+    ],
+  },
+  {
+    id: 'R2',
+    title: '返工环：两轮全红（失败签名不同）→ 轮次上限拦下第 3 轮，诚实失败',
+    expected: 'sandbox_rejected',
+    setup: [{ path: 'src/calc.ts', content: GREEN_CALC }],
+    approval: 'allow_once',
+    steps: [RED_MULTIPLY],
+    // 第 3 轮脚本是本可修好的改动——maxRounds=2 时它不应被执行（与 R3 的熔断观察点对称）。
+    repair: { maxRounds: 2, rounds: [{ steps: [RED_SYNTAX_FROM_MUL] }, { steps: [FIX_FROM_MUL] }] },
+    assert: (f) => [
+      { name: '执行了 2 轮（第 3 轮未执行）', ok: f.repair?.roundsExecuted === 2, detail: `实际 ${f.repair?.roundsExecuted}` },
+      { name: '两轮失败签名不同（未触发同错误熔断）', ok: f.repair?.history[0]?.failureKey !== f.repair?.history[1]?.failureKey, detail: `${f.repair?.history[0]?.failureKey} vs ${f.repair?.history[1]?.failureKey}` },
+      { name: '第 2 轮前判定 retry', ok: f.repair?.decisions[0]?.action === 'retry', detail: f.repair?.decisions[0]?.action },
+      { name: '第 3 轮前判定 abort/max_rounds', ok: f.repair?.decisions[1]?.action === 'abort' && f.repair?.decisions[1]?.reason === 'max_rounds', detail: `${f.repair?.decisions[1]?.action}/${f.repair?.decisions[1]?.reason}` },
+      { name: '全程无审批卡', ok: f.approvals.length === 0, detail: `实际 ${f.approvals.length}` },
+      { name: '未落盘', ok: f.post['src/calc.ts'] === f.baseline('src/calc.ts') },
+    ],
+  },
+  {
+    id: 'R3',
+    title: '返工环：相邻两轮同错误 → 熔断（第 3 轮不再执行）',
+    expected: 'sandbox_rejected',
+    setup: [{ path: 'src/calc.ts', content: GREEN_CALC }],
+    approval: 'allow_once',
+    steps: [RED_MULTIPLY],
+    // 第 2 轮交出一模一样的坏改动（steps 为空 = 暂存内容不变，失败签名必然相同）；
+    // 第 3 轮脚本是本可修好的改动——熔断生效时它不应被执行。
+    repair: { maxRounds: 3, rounds: [{ steps: [] }, { steps: [FIX_FROM_MUL] }] },
+    assert: (f) => [
+      { name: '只执行了 2 轮（第 3 轮未执行）', ok: f.repair?.roundsExecuted === 2, detail: `实际 ${f.repair?.roundsExecuted}` },
+      { name: '两轮失败签名相同', ok: f.repair?.history[0]?.failureKey !== undefined && f.repair?.history[0]?.failureKey === f.repair?.history[1]?.failureKey, detail: f.repair?.history[0]?.failureKey },
+      { name: '第 3 轮前判定 cutoff/same_error', ok: f.repair?.decisions[1]?.action === 'cutoff' && f.repair?.decisions[1]?.reason === 'same_error', detail: `${f.repair?.decisions[1]?.action}/${f.repair?.decisions[1]?.reason}` },
+      { name: '全程无审批卡', ok: f.approvals.length === 0, detail: `实际 ${f.approvals.length}` },
+      { name: '未落盘', ok: f.post['src/calc.ts'] === f.baseline('src/calc.ts') },
+    ],
+  },
+  {
+    id: 'R4',
+    title: '返工环：预算中途耗尽 → 诚实中止（无部分落盘）',
+    expected: 'sandbox_rejected',
+    setup: [{ path: 'src/calc.ts', content: GREEN_CALC }],
+    approval: 'allow_once',
+    steps: [RED_MULTIPLY],
+    // budgetRounds=1 模拟 run 级预算只够 1 轮：第 1 轮红后预算即耗尽，第 2 轮（本可修好）不执行。
+    repair: { maxRounds: 3, budgetRounds: 1, rounds: [{ steps: [FIX_FROM_MUL] }] },
+    assert: (f) => [
+      { name: '只执行了 1 轮', ok: f.repair?.roundsExecuted === 1, detail: `实际 ${f.repair?.roundsExecuted}` },
+      { name: '第 2 轮前判定 abort/budget', ok: f.repair?.decisions[0]?.action === 'abort' && f.repair?.decisions[0]?.reason === 'budget', detail: `${f.repair?.decisions[0]?.action}/${f.repair?.decisions[0]?.reason}` },
+      { name: '全程无审批卡', ok: f.approvals.length === 0, detail: `实际 ${f.approvals.length}` },
+      { name: '未落盘（无部分落盘）', ok: f.post['src/calc.ts'] === f.baseline('src/calc.ts') },
+    ],
+  },
+  {
+    id: 'R5',
+    title: '返工环：返工绿后拒绝审批 → 仍不落盘（人闸不动）',
+    expected: 'approval_denied',
+    setup: [{ path: 'src/calc.ts', content: GREEN_CALC }],
+    approval: 'deny',
+    steps: [RED_MULTIPLY],
+    repair: { maxRounds: 3, rounds: [{ steps: [FIX_FROM_MUL] }] },
+    assert: (f) => [
+      { name: '首轮红', ok: f.repair?.history[0]?.ok === false },
+      { name: '返工轮验证通过', ok: f.repair?.history[1]?.ok === true },
+      { name: '审批恰好 1 次（只出现在返工绿之后）', ok: f.approvals.length === 1, detail: `实际 ${f.approvals.length}` },
+      { name: '错误码为 APPROVAL_DENIED', ok: f.result.error?.code === 'APPROVAL_DENIED', detail: f.result.error?.code },
+      { name: '拒绝后未落盘', ok: f.post['src/calc.ts'] === f.baseline('src/calc.ts') },
+    ],
+  },
 ];
 
 function readFixture(rel: string): string {
@@ -286,6 +400,7 @@ async function runCase(
   let rolledBack: string[] = [];
   let sandbox: Facts['sandbox'] = { ran: false, ok: false, steps: [] };
   let host: Facts['host'] = null;
+  let repair: EditEvalRepairTrace | undefined;
   const notes: string[] = [];
   try {
     const ensured = await session.ensure();
@@ -338,12 +453,61 @@ async function runCase(
       },
     };
 
-    for (const step of sc.steps) {
-      const out = await registry.execute(step.tool, step.args, ctx);
-      if (!out.result.ok) notes.push(`${step.tool} 失败：${out.result.error?.code ?? 'UNKNOWN'} ${out.result.error?.message ?? ''}`);
+    const runSteps = async (steps: StepSpec[], round: number) => {
+      for (const step of steps) {
+        const out = await registry.execute(step.tool, step.args, ctx);
+        if (!out.result.ok) notes.push(`第 ${round} 轮 ${step.tool} 失败：${out.result.error?.code ?? 'UNKNOWN'} ${out.result.error?.message ?? ''}`);
+      }
+    };
+    const submitOnce = async (round: number): Promise<Facts['result']> => {
+      const submitted = await registry.execute('submit_changes', { summary: `${sc.id} ${sc.title}${sc.repair ? `（第 ${round} 轮）` : ''}` }, ctx);
+      const r = submitted.result as unknown as Facts['result'];
+      // 每轮各自捕获沙箱事件（后续轮覆盖前一轮；最终提取取最后一轮）
+      const ev = [...events].reverse().find((e) => e.type === 'verification_completed' && e.data?.phase === 'sandbox');
+      if (ev) {
+        sandbox = {
+          ran: true,
+          ok: ev.data?.ok === true,
+          steps: Array.isArray(ev.data?.steps)
+            ? ev.data!.steps.map((x: any) => ({ source: String(x.source), ok: x.ok === true, summary: String(x.summary ?? '') }))
+            : [],
+        };
+      }
+      return r;
+    };
+    const roundOutcome = (r: Facts['result']): RepairRoundOutcome => {
+      // 只看沙箱验证（不含审批/落盘——R5 的返工绿后审批被拒仍算 ok）；无事件时退回错误码作签名。
+      const failed = sandbox.steps.find((x) => !x.ok);
+      return { ok: sandbox.ran && sandbox.ok, failureKey: failed ? `${failed.source}: ${failed.summary}` : r.error?.code };
+    };
+
+    if (sc.repair) {
+      const maxRounds = sc.repair.maxRounds;
+      const budgetRounds = sc.repair.budgetRounds ?? maxRounds;
+      const trace: EditEvalRepairTrace = { maxRounds, budgetRounds, roundsExecuted: 0, decisions: [], history: [] };
+      const history: RepairRoundOutcome[] = [];
+      await runSteps(sc.steps, 1);
+      result = await submitOnce(1);
+      trace.roundsExecuted = 1;
+      const o1 = roundOutcome(result);
+      history.push(o1);
+      trace.history.push({ round: 1, ok: o1.ok, failureKey: o1.failureKey, errorCode: result.error?.code });
+      for (let i = 0; i < sc.repair.rounds.length; i++) {
+        const d = decideRepair(history, { maxRounds, budgetAvailable: trace.roundsExecuted < budgetRounds });
+        trace.decisions.push({ beforeRound: i + 2, action: d.action, ...('reason' in d ? { reason: d.reason } : {}) });
+        if (d.action !== 'retry') break;
+        await runSteps(sc.repair.rounds[i].steps, i + 2);
+        result = await submitOnce(i + 2);
+        const oi = roundOutcome(result);
+        history.push(oi);
+        trace.roundsExecuted++;
+        trace.history.push({ round: i + 2, ok: oi.ok, failureKey: oi.failureKey, errorCode: result.error?.code });
+      }
+      repair = trace;
+    } else {
+      await runSteps(sc.steps, 1);
+      result = await submitOnce(1);
     }
-    const submitted = await registry.execute('submit_changes', { summary: `${sc.id} ${sc.title}` }, ctx);
-    result = submitted.result as unknown as Facts['result'];
     const data = (result.data ?? {}) as Record<string, any>;
     applied = Array.isArray(data.applied) ? data.applied.map(String) : [];
     rolledBack = Array.isArray(data.rolledBack) ? data.rolledBack.map(String) : [];
@@ -385,6 +549,10 @@ async function runCase(
     const p = s.args.path;
     if (typeof p === 'string') paths.add(p);
   }
+  if (sc.repair) for (const rd of sc.repair.rounds) for (const s of rd.steps) {
+    const p = s.args.path;
+    if (typeof p === 'string') paths.add(p);
+  }
   for (const p of paths) {
     try {
       post[p] = existsSync(join(repo, p)) ? readFileSync(join(repo, p), 'utf8') : null;
@@ -404,6 +572,7 @@ async function runCase(
     events,
     sandbox,
     host,
+    repair,
     baseline: (rel) => sc.setup?.find((s) => s.path === rel)?.content ?? (existsSync(join(FIXTURE, rel)) ? readFixture(rel) : null),
   };
   const assertions: EditEvalAssertion[] = [
@@ -431,6 +600,7 @@ async function runCase(
     postFiles: post,
     assertions,
     notes,
+    repair,
     tokens: 0,
     costUsd: 0,
   };
@@ -500,7 +670,10 @@ async function main(): Promise<void> {
       gitHead: gitHead.status === 0 ? gitHead.stdout.trim() : undefined,
       gitDirty: gitStatus.status === 0 ? gitStatus.stdout.trim().length > 0 : undefined,
       evidenceDir: relative(REPO_ROOT, evidenceRoot).replace(/\\/g, '/'),
-      notes: ['场景 E6 只在宿主非 Linux 时运行；其余场景跨平台。'],
+      notes: [
+        '场景 E6 只在宿主非 Linux 时运行；其余场景跨平台。',
+        'R 系列为「复验驱动返工环（R-Loop）」Phase 0 尺子：脚本按 decideRepair 驱动多轮 submit_changes（0 token，返工发生在审批前的沙箱内，人闸不动）；设计见 reports/REPAIR_LOOP_PLAN.md。',
+      ],
     },
     results,
   );

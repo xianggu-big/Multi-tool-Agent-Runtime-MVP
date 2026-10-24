@@ -3,7 +3,9 @@
 > 本项目代码在 `multi-tool-agent/`（注意：`multi-tool-agent/agents/AGENTS.md` 是**生成的子 Agent 契约文档**，与本文件无关，勿混淆）。
 > 本项目规模较大、自己已有一套文档体系（README / docs / reports），**改动前先读 `multi-tool-agent/reports/PROJECT_REPORT.md`**。
 
-## 当前状态（最后更新 2026-10-24 第十四轮；工程实测基线仍为第十二轮 = **79 个测试文件 / 490 子测试 / 490 通过 / 0 失败 / 0 跳过**；本轮报告修订 + 本机探针补测，未改 `src/`，未跑测试）
+## 当前状态（最后更新 2026-10-24 第十五轮；工程实测基线 = **80 个测试文件 / 500 子测试 / 500 通过 / 0 失败 / 0 跳过**；本轮 R-Loop Phase 0：eval 层 + 纯函数 + 测试，未动运行时）
+
+> ✅ R-Loop 复验驱动返工环 Phase 0（2026-10-24 第十五轮，先定尺子，未动运行时）：写路径「验证失败 → 自动返工」的评测尺子落地。① 判定纯函数 `decideRepair`（`src/evaluation/editEval.ts`）：优先级 = 绿收尾 → 轮次上限 → 预算 → 首轮放行 → 相邻同错误熔断 → 继续；设计文档 `multi-tool-agent/reports/REPAIR_LOOP_PLAN.md`（三条铁律：人闸不动 / fail-closed 有上限（`MTA_REPAIR_MAX_ROUNDS`，Phase 1 计划参数，未进 config）/ 如实上报）。② `eval:edit` 扩到 **12 场景**（E1~E7 基线 + R1~R5 返工环，`scripts/edit-eval.ts` 按 `decideRepair` 驱动多轮 `submit_changes`，返工发生在审批前沙箱内）：R1 首轮红→返工绿后审批仍出现并落盘；R2 两轮全红→轮次上限拦下本可修好的第 3 轮；R3 相邻同错误→熔断（cutoff/same_error）；R4 预算耗尽→诚实中止无部分落盘；R5 返工绿后拒绝审批→不落盘。③ 实测：`eval:edit` **12/12**（7 审批 / 5 落盘 / 1 回滚 / 平均 13.0s / P95 15.1s / 0 token）、`npm test` **80 文件 / 500 子测试 / 500 通过**、typecheck 0 错误、agents:lint 三项通过；新增 `tests/80_repair_loop.test.ts`（10 例）。**Phase 1（AgentRuntime 编排返工环）/ Phase 2（真模型 A/B）待用户复审后开工**。明细 `reports/CHANGELOG.md` 同日「R-Loop Phase 0」条目。
 
 > ✅ 压测报告复核修正 + 两条上限路径补测（2026-10-24 第十四轮，报告/探针，未改业务代码）：复核 `reports/API_LOAD_TEST_2026-10-24.md` 发现两处方法学缺陷并修正——① POST 压测只发 60 个请求（< `MAX_ACTIVE_RUNS` 默认 64），429 写入上限设计上不可能触发，报告原写"含 429 拦截符合预期"属误导，已如实改为"未被触发"；② SSE 用已完成 run 测（回放 <1s 交错关闭、存活峰值低于 32），对上限是否生效信息量为零。新增 §3.1 补测（`.eval/api-limit-probe.mjs`，隔离实例 `PORT=3100` + 独立库 `data/probe-limit/`，主库零污染，阈值调小 `MAX_ACTIVE_RUNS=4`/`STREAM_MAX_CONNECTIONS=2`）：**POST 20 并发 → 4 created（正好=上限）+ 16× 429**（`TOO_MANY_ACTIVE_RUNS`），终态后恢复 201；**对活跃 run 开 4 条 SSE → 2× 200 + 2× 429（Retry-After: 5）**，终态后计数回落 0、重连回放 200。文档地图补登记（README §7 / PROJECT_REPORT §8）。基线不变。
 
@@ -78,7 +80,7 @@
 - 轻量级 Agent Runtime MVP：一套共享 Agent Loop 驱动 codebase / research / misc / orchestrator 四类 Agent；可运行、可测试、可演示，非生产系统。
 
 **已确认的结论与约束（2026-10-15 实机复验）**
-- 工程健康度（2026-10-24 实跑）：`npm run typecheck` 0 错误；`npm test` **78 文件 / 482 子测试 / 482 通过 / 0 跳过 / 0 失败 / 约 22s**；`npm run agents:lint` 三项门禁通过；`eval:edit` **7/7**；`eval:edit:real` **26/26**；4 个 Mock demo 的最近记录仍为 completed。
+- 工程健康度（2026-10-24 实跑）：`npm run typecheck` 0 错误；`npm test` **80 文件 / 500 子测试 / 500 通过 / 0 跳过 / 0 失败 / 约 20s**；`npm run agents:lint` 三项门禁通过；`eval:edit` **12/12**（E1~E7 + R1~R5 返工环）；`eval:edit:real` **26/26**；4 个 Mock demo 的最近记录仍为 completed。
 - M1/M1' 写能力：默认**可用**（`CODEBASE_WRITE_ENABLED` 默认 true，部署可显式 false 整机禁用）；写操作走「本 run 界面显式授权（「允许修改文件」开关 → `allowWriteSpecs`）→ 沙箱阶梯 → 一次批量审批 → 落盘 → 宿主复验（失败自动回滚）」；`code-edit` 是唯一可写 spec。实测四修：快照自引用崩溃 / hostVerify 继承运行期 env 致恒失败回滚 / 分类器被测试名污染 / 容器内套件 2 条平台假设失败——都带回归守卫（40k/40l/39i）。
 - 真实模型（deepseek-flash，Key 来自系统用户级环境变量 `DEEPSEEK_API_KEY`，`.env` 留空即可）：
   - 单 Agent 冒烟通过（2 步 / 1781 tok / $0.00015 / 104 流式帧）。
