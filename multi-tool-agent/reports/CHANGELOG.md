@@ -14,6 +14,9 @@
 
 | 日期 | 参数 | 旧值 | 新值 | 原因 |
 |---|---|---|---|---|
+| 2026-10-23 | 新增 `MTA_CODEX_ENABLED` / `MTA_CODEX_BIN` | — | **true / `codex`** | Codex 直连总开关与可执行文件；关闭后不接受 `runType=codex`，也不注册 `codex_exec` |
+| 2026-10-23 | 新增 `MTA_CODEX_MODEL` | — | **空**（用 `~/.codex/config.toml` 的 model） | 可选覆盖；本机 DeepSeek 端点只接受 `deepseek-flash` / `deepseek-v4-pro` |
+| 2026-10-23 | 新增 `MTA_CODEX_TIMEOUT_MS` / `MTA_CODEX_MAX_OUTPUT_BYTES` / `MTA_CODEX_REASONING_TAP` / `MTA_CODEX_SUMMARY_CHARS` | — | **600000 / 4MiB / true / 20000** | 单次上限、stdout 缓冲、rollout 旁路读取、答案回传上限 |
 | 2026-10-23 | 新增 `McpBridgeOptions.requireApprovalForHighRisk` | — | **true** | `destructiveHint=true` 的 MCP 工具在本地沙箱之外执行，副作用无法复验；默认必须人工批准，缺审批通道时 fail-closed |
 | 2026-10-23 | 新增 `MTA_MCP_SERVERS` | — | **空数组**（不连接任何外部 MCP） | JSON 数组显式 opt-in；每个 server 必须给 `names` 白名单，避免外部工具 schema 全量进上下文；非法配置启动即报错 |
 | 2026-10-22 | 新增 `RunInput.allowRunTests`（本 run 覆盖，非环境变量） | — | 未设置 = 跟随 `CODEBASE_RUN_TESTS_ENABLED` | 运行测试是「在目标仓库执行代码」的能力：默认关闭时 `run_tests` 不进工具池；界面显式勾选才开启本 run |
@@ -78,7 +81,76 @@
 
 ---
 
+## 2026-10-24
+
+### 工作台打磨八项：tooltip 分级 / 键盘可达 / 侧栏 sticky / 窄屏响应 / 写路径深色实测（纯前端）
+
+**为什么现在做**：用户问「还有什么问题」，我列了 8 项（写路径界面未实测 / 3 秒偏慢 / 未提交 git / 侧栏不固定 / 无响应式 / 键盘无 tooltip / 灯命中区小 / Mock 无剧本秒回），用户回复全做。
+
+- **② 延迟分级**：`arm()` 按文本长度分档——短提示（≤20 字）1 秒即出，长说明保持 3 秒避免误弹。
+- **⑥ 键盘可达**：`focusin/focusout` 走同一 tooltip 机制（checkbox 聚焦经 `closest` 命中外层 label 的 data-tip）。
+- **④ 侧栏 sticky**：`top:12px + max-height:calc(100vh-24px)` 内部滚动，主区下滚时设置不跟走。
+- **⑤ 窄屏响应**：`<900px` 单列堆叠；**窄屏首次访问（无 localStorage 记录）默认收起侧栏**——浏览器 agent 696px 视口 + 上轮持久化的收起态把「灯不可见/坐标出视区」暴露出来，顺势补上这条规则。
+- **⑦ 灯命中区**：`.run-lamp::before { inset:-6px }`，9px 方块实际可悬停 21px。
+- **⑧ Mock 默认剧本**：mock 模式下任务类型为 codebase/research/misc 时自动填对应演示剧本（`dataset.auto` 标记，用户手动选过 `__manual__` 不再覆盖），消灭「由模型决定 → 0.1s 占位答案」的首次困惑。
+- **① 写路径深色实测**（真 DeepSeek 编排写任务，目标 `D:/temp/mta-write-ui-check`）：审批卡琥珀边框 / diff 深底绿字 / 按钮文字全部可读 → 批准 → 「改动已落盘」卡片 + completed + 灯常绿 → 瀑布图深底可读；`notes.md` 内容核对正确；控制台零错误。真实任务 +1（`report:refresh`：415 任务 / 真实 71）。
+- **附带**：修本轮 Edit 引入的 18 处 bare LF（全文件归一 CRLF）。
+
+**验证**：`npm test` **465/465 / 0 跳过**（Docker 已启动，沙箱用例回归）；typecheck 0 错误；浏览器确定性测试（合成事件 + 定时轮询）：1 秒档弹出 / 1.2 秒不长说明不误弹 / 3.5 秒长说明弹出 / focus 触发弹出，全部命中；写意图对话框 Esc 关闭复验 PASS。
+
+### 注释收拢为悬停 3 秒 tooltip + 输入栏整理（纯前端）
+
+**为什么现在做**：用户反馈「排版好乱」——侧栏与底部输入栏常驻 22 处 hint 说明文字挤压视觉空间。要求：所有注释改为**鼠标悬停 3 秒后才显示**，并整理排版。
+
+- **tooltip 机制**：自定义 `.tipbox`（panel-2 深底 + 边框、max-width 340px、pointer-events none、淡入 120ms），document 级 mouseover/mouseout 委托 + 3000ms 定时器；`data-tip`=静态文本、`data-tip-src`=动态文本（routeNote 自引用：截断后悬停看全文）。11 处原生 `title` 全部替换为 data-tip（原生出现太快且样式不可控）。
+- **收拢 12 处常驻说明**：写能力 / 编排 / 杂项 / Codex / Token 预算 / 实时流 / 事件流·错误·复盘·定时四页签 / run_tests / Key 数据边界——`<p class="hint">` 删除、文本挂到对应控件 data-tip（标签加 ⓘ 提示可悬停）；保留 2 处动态状态行（环境变量 Key / Serper 配置状态）与 2 处默认隐藏的 warn 提示（写能力被禁/白名单缺 code-edit）。
+- **输入栏整理**：run_tests 复选框文案缩短为「允许运行测试（白名单命令）」（长说明进 tooltip）；routeNote 省略号截断（max-width 320px）。
+- **修一个真 bug**：scroll 捕获监听原本连同「待触发定时器」一起取消 → 悬停时任何页面滚动（含自动化 scrollIntoView）都会让气泡永不出现；改为只隐藏已显示的气泡。浏览器实测先复现（事件流页签两轮 5 秒不弹）后修复复验通过。
+- **边界**：tests/59、61 静态断言字符串未触碰；运行时/SSE 逻辑零改动。
+
+**验证**：`npm test` **464 通过 / 1 跳过 / 0 失败**（跳过项=Docker 守护进程未运行的沙箱用例，非回归）；typecheck 0 错误。浏览器实测：悬停 2 秒无气泡 / 4 秒出现（延迟正确）、移开即消失、页签与复选框气泡正常、输入栏无长文字、routeNote 截断、控制台无 JS 错误。
+
+---
+
 ## 2026-10-23
+
+### 工作台布局改版：设置改可收起侧栏 + 删除顶部大标题区（纯前端）
+
+**为什么现在做**：用户看完成品后反馈「有点丑」——顶部 80px 大标题区（标题 + 副标题 tagline + MCP 状态行）浪费纵向空间，设置面板常驻挤占主视图。确认方案 B：**无顶栏 + 悬浮按钮**。
+
+- **删除 `<header>`**：大标题、副标题 tagline（直接删，不留 tooltip）、MCP 行整体移除；`header` 相关 CSS 一并清理。
+- **侧栏头部**：设置面板顶部新增一行 = 运行灯 + 等宽「MTA WORKBENCH」+「✕ 收起」；其下是 MCP 状态行（`mcpState`/`mcpReconnect` 两个 id 原样搬入，JS 零改动）；原「设置」panel-title 删除（与侧栏头部重复）。
+- **收起/展开**：`body.sb-collapsed` 驱动——`.layout` 变单列全宽（padding-top 让出悬浮按钮位）、侧栏隐藏、左上角 fixed「≡ 设置」按钮出现（内含第二颗运行灯，同一 `body[data-run-state]` CSS 点亮）。触发：✕ / ≡ / **Ctrl+B**；状态记 `localStorage['mta.sidebarCollapsed']`，刷新保持。
+- **边界**：运行时逻辑与 SSE 渲染零改动；tests/59、61 静态断言守卫未触碰。
+
+**验证**：`npm test` **465/465**；typecheck 无涉（未改 TS）。浏览器实测（绕缓存 `?v=2`）：新版布局渲染、✕ 收起/≡ 展开、Ctrl+B 双向切换、收起态刷新记忆全部 PASS；运行中间态截图未捕到系 Mock 未选剧本 0.1s 即终态（服务日志 `run_mvl5exe8_*` durationMs=136 证实），机制上轮已验。控制台仅导航中断的 `ERR_ABORTED`，无 JS 错误。
+
+### 工作台蓝黑主题 + 按钮/体验优化（纯前端）
+
+**为什么现在做**：用户要求界面改为「蓝色 + 黑色」主题并优化按钮与使用体验。只动 `public/index.html`（单文件工作台），不触碰运行时与 SSE 防卡死渲染逻辑。
+
+- **蓝黑单主题**：`:root` 换深蓝黑四层表面（`--bg #0b1220` / `--panel #111a2e` / `--panel-2 #182338` / `--inset #0e1626`）+ 亮蓝高亮（文本蓝 `#60a5fa`、按钮蓝 `#2563eb`）；CSS 约 120 处硬编码浅色收敛为 `--tint-*` 半透明状态色（绿/红/琥珀/紫亮色变体按深底 WCAG AA 选取）；JS 38 处内联颜色与 SVG 瀑布图（`KIND_COLOR`/`STATUS_BADGE`/刻度文字）同步换深底可读色。
+- **按钮体系**：统一 hover / active（按下 1px 位移 + 硬边偏移阴影消失）/ focus-visible 焦点环 / disabled 0.45 + 过渡动画；页签 hover 提亮；输入框聚焦发光、底部输入栏 `:focus-within` 蓝边。
+- **像素风点缀（克制 5 处）**：按钮硬边阴影、流程监控节点图标 8px 方块（去圆角）、面板标题等宽大写、流式光标 `steps(1)` 闪烁保留、header 运行灯方块。
+- **体验**：深色滚动条（webkit + `scrollbar-color`）、`::selection` 主题蓝、`caret-color`、`color-scheme: dark`（原生 checkbox/select/滚动条同步深色）；header 方块指示灯由 `body[data-run-state]` 驱动（running=绿闪 / awaiting_user=琥珀闪 / completed=绿常亮 / failed·limit_reached·cancelled=红，挂点在 `renderStatus`）；运行中「开始任务」→「运行中…」终态恢复；写能力确认对话框支持 Esc 关闭；goal placeholder 补「Ctrl+Enter 开始」提示（快捷键本已存在）。
+- **边界**：不做浅色切换（纯单主题）；SSE 帧合并 / 增量 append / 500 节点上限 / 滚动节流未动。
+
+**验证**：typecheck 0 错误；`npm test` **72 文件 / 465 子测试 / 465 通过 / 0 失败 / 0 跳过**（tests/59、61 静态断言守卫未破坏）；`npm run agents:lint` 通过。浏览器实测（`localhost:3000`）：6 页签深底可读、按钮 hover 生效、Mock 任务全流程（指示灯灰→绿闪→常绿、按钮文案切换、深色卡片流、控制台零报错）。
+
+### Codex 直连 + 定时任务 + 无人值守安全策略
+
+**为什么现在做**：用户希望「随时调用本机 Codex 当 code agent」，并在不在场时按时间自动跑；同时不能因此绕过 M1 的沙箱/审批/回滚体系，也不能让危险命令在无人值守时直接执行。
+
+- **Codex 直连（外部 Agent 适配器）**：新增 `runType='codex'` + `src/codex/`。直接驱动本机 `codex exec --json`（Windows 下解析 `.cmd` shim → 包内 `codex.js` 用 node 直接 spawn，避开 cmd 对中文路径的解析错误）。复用 run 记录 / SSE / 取消 / 终态 / 复盘；不经过内置 LLM Loop，也不要求 API Key。事件映射：`thread.started → codex_thread`、`agent_message → llm_delta/content`、`command_execution → tool_started/tool_completed(codex_shell)`、`turn.completed → usage`。**item 级 error（模型元数据缺失）只记为 warning，不再把成功的 turn 判失败**（真实 E2E 暴露）。
+- **思考过程（best-effort）**：`codex exec --json` 不给思考正文；`MTA_CODEX_REASONING_TAP=true` 时旁路增量读取 `~/.codex/sessions/**/rollout-*.jsonl` 的 `reasoning_text`，失败自动降级为「命令+回答」，不影响最终答案。
+- **会话续问**：保存 `threadId + workspaceId`；`codex exec resume <id>` 不接受 `-C`，因此工作副本按 workspaceId 稳定（只读 `data/codex/<ws>/repo`，写模式 `data/sandbox/codex_<ws>/repo`），续接写会话必须带 workspaceId。
+- **写路径**：Codex 只改副本 → `scanCodexChanges` 检测 create/edit/delete → 逐文件 `session.stage()` → 复用 `submit_changes`（L0/L1 阶梯 → 审批/暂缓 → apply-journal → 落盘 → 宿主复验 → 失败回滚）。**副本排除 `.env*/.git/data/node_modules`**，Codex 不能直接读密钥。同时修了阶梯对非 TS 仓库的误判：无 `tsconfig.json` 时跳过 tsc，无 `tests/` 且无 test 脚本时跳过测试（真实 E2E 暴露的 TS5058）。
+- **定时任务**：新增 `schedules` 表 + `SchedulerService`（30s tick，`once` / `daily`，停服不补跑，重叠默认跳过）+ `runs.scheduleId` 迁移列 + `GET/POST/PATCH/DELETE /api/schedules`、`run-now`、`/:id/runs`。只在 `src/index.ts` 启动（测试/演示不触发）。
+- **无人值守安全策略**：`autoApprove` 只对带 `scheduleId` 的服务端 run 生效（HTTP 客户端传 → 400）。普通 create/edit 自动放行；**删除 / 宿主命令 / MCP destructive 暂缓**进 `pending_actions`，跑完在「定时」页签汇总，由用户点「执行 / 忽略」。删除执行前复核 `baseHash`（变化 → `STALE_ACTION`，需重跑）；命中注入污点整批拒绝自动落盘（`AUTO_DEFERRED_TAINT`）。MCP destructive 本轮仍硬拒绝，不进待确认。
+- **三入口**：`runType='codex'`（主入口）+ `codex_exec` 工具（codebase / orchestrator 自检工具，写模式受 `allowCodexWrite` fail-closed）+ `codex-code` 子 Agent spec（`codex:exec` + `submit_finding`，`agents:lint` 通过）。
+- **前端**：「定时」页签（表单/列表/立即运行/启停/删除/待确认面板）、任务类型增加 Codex、Codex 专属字段、会话续接按钮、Codex 执行摘要；`run_completed` 长答案从 `/api/runs/:id` 补全。
+
+**验证**：typecheck 0 错误；`npm test` **72 文件 / 465 子测试 / 465 通过 / 0 失败 / 0 跳过**（新增 `tests/69~72`）；`npm run agents:lint` 通过。真实 E2E（2026-10-23）：只读两轮 **completed**（答案 `calc.js/stringUtils.js`；续问 `add/sub/mul/div`；`reasoningCaptured=true`）；写模式 **completed**（1 文件导入 → 1 次审批 → `hello.js` 落盘）；定时 + 自动审批 **completed**（edit 自动落盘、delete 进待确认 → 手动执行 → 文件删除且备份保留）。边界：思考旁路为非公开契约；Codex token 费用未计入；停服不补跑。
 
 ### 编排预筛 + MCP 安全/运维 + 真实 E2E 收口（T1~T7）
 
@@ -180,6 +252,130 @@
 - **P2**：README §2 工具表漂移（缺 `knowledge_search` / `ask_user`）；`codebase:write` 粒度过粗；工具池定义三处并存。
 
 **验证**：`npm run typecheck` 0 错误；`npm run agents:lint` 三项全过；`npm test` **416/416 通过、0 跳过、0 失败（24.9s）**。未跑真实模型 / `eval:*` / 前端浏览器实测。
+
+### 本地 embedding 接入（qwen3-embedding:0.6b）+ RAG 首轮实测
+
+**背景**：`vector` 单路 Recall 只有 52.9%，根因是 `hash-ngram-256` 是**词法哈希、不是语义模型**；方案见 `reports/RAG_IMPROVEMENT_2026-10-23.md`。
+
+**改动**：
+
+- 新增 `scripts/embed-selfcheck.mjs` + `npm run embed:check`：9 项自检（服务存活 / 维度 / L2 归一化 / 语义区分度 / MRL 降维 / 原生接口）。
+- `scripts/rag-bench.ts`：`createConfiguredEmbedder() ?? createHashAsyncEmbedder(256)`；新增 `RAG_BENCH_EMBEDDER=hash` 回退开关；报告头动态写入实际 embedder 与维度；质量表新增 `hybrid_weighted` 并加 alpha 扫描（0.3~0.9）。
+- `.env` 追加 `MTA_EMBEDDING_*`（Ollama + `qwen3-embedding-0.6b` + dim 1024）。
+- 本机前置：`ollama cp qwen3-embedding:0.6b qwen3-embedding-0.6b` 建别名（注册表 ID 是短横线，Ollama tag 是冒号，直接用会 404）。
+
+**实测**（2026-10-23，同语料 217 chunks / 17 queries，只换 embedding）：
+
+- `vector` Recall@5 **52.9% → 94.1%**（MRR 0.392→0.737，nDCG 0.299→0.477）
+- `hybrid` 100%→94.1%，`hybrid_rerank` 94.1% 持平（nDCG −0.032）
+- 索引侧：HNSW ef=32 82.9%→95.9%；IVF nprobe=8 87.1%→96.5%
+- `hybrid_weighted`（alpha=0.5 默认）：94.1% / **0.835** / 0.570 —— MRR 为所有模式最高
+- alpha 扫描：0.3 → nDCG **0.591**（最高）；0.4 → 0.814 / 0.587（nDCG 反超默认 RRF 0.819/0.555）；Recall 在所有 alpha 下恒为 94.1%（权重只影响排序）
+- 运行时：253 chunks 冷启动 **8.3s**；预热后 vector 22~39ms / keyword 4ms / hybrid_rerank 53ms
+
+**评测集重建（同轮）**：查询从 18 条扩到 **34 条**（每个标注短语出 `literal` + `paraphrase` 两版），报告新增 §2.2 按类型拆分；修掉子集统计分母误用全集的 bug。同一 34 条上 hash vs qwen：
+
+- `vector` 47.1% → 76.5%（**同义型 23.5% → 64.7%，+41.2pt**；字面型 70.6% → 88.2%）
+- `hybrid` 76.5% → 79.4%（MRR 0.572→0.632；同义型 70.6%→76.5%）
+- `hybrid_rerank` 在 qwen 下**反而最差**（MRR 0.586 < hybrid 0.632）→ 词法 rerank 应默认关
+- **修正**：此前「alpha=0.4 最优」在 34 条上不复现（小样本过拟合）
+- **局限**：同义型仍与原文共享内容词（keyword 仍有 70.6%），零词面重叠版待下一轮
+
+**抽象型查询（第三类，同轮）**：评测集扩到 **51 条** = 17 标注 × 3 问法（literal / paraphrase / abstract，abstract 只描述现象不提技术名词）。
+
+- `vector` 在抽象型上 **11.8% → 52.9%（+41.1pt）**；同义型 +41.2pt；字面型仅 +17.6pt —— 语义增益精确集中在「换个说法」
+- 但 **BM25 仍是强基线**：抽象型 keyword 58.8% 仍略高于 vector 52.9%
+- **`hybrid` 是唯一三档都不掉队的模式**（82.4 / 76.5 / 64.7），抽象型 64.7%
+- alpha=0.5 在 51 条上确认最优；`hybrid_rerank` Recall 最高（76.5%）但 nDCG 更低（0.354 < 0.370）→ 词法 rerank 应默认关
+
+**结论**：瓶颈确在 embedding，**检索代码未改**。语义模型的增益集中在「同义型 / 抽象型」（各 +41pt）；词法 rerank 会打乱语义结果，应等 cross-encoder。默认建议 `hybrid`（RRF），rerank 默认关。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **444/444 通过、0 跳过、0 失败（23.4s）**；`npm run embed:check` PASS；`reports/RAG_EVAL.md` 已按语义模型重生。
+
+### 按复盘清单修复：后台补索引 / 冻结评测语料 / 可诊断失败 / 规模开关
+
+**背景**：`reports/SUMMARY_2026-10-23.md` 列出的 15 条问题里，能立刻修的先修（其余为需要产品决策或大改 UI 的项，保持遗留）。
+
+**改动**：
+
+- **后台补索引**（复盘 #10）：`KnowledgeHubOptions.backgroundIndex`（env `MTA_RAG_BACKGROUND_INDEX`，默认 false，`.env` 已开）。写入/删除改成 O(1) 标脏 + 后台异步刷新；前台检索与后台补算**共享同一个 in-flight 构建**（`ensureIndex`），并用 `dataVersion` 防止「构建期间又写入」导致返回旧缓存。
+- **评测语料冻结**（复盘 #8）：新增 `eval/rag-corpus/`（23 文件 / 426KB 快照）；`rag-bench` 优先读快照，报告头写明「冻结/未冻结」。新基线：**61 queries / 220 chunks**，`hybrid_rerank` Recall 72.1% / MRR 0.504 / nDCG 0.334。
+- **失败可诊断**（复盘 #5）：`OpenAICompatibleEmbedder` 区分「连不上」（带 baseUrl 与 `ollama serve` 提示）与「服务返回错误」；`npm run doctor` 新增 **Embedding 服务探针**（5s 超时，只在直接运行时读 `.env`），本机实测输出「qwen3-embedding-0.6b 可用（维度 1024）」。
+- **导入器不再静默跳过**（复盘 #2）：`--max-file-bytes` 默认 2→**8 MiB**；超限文件**始终**打印文件名+大小，汇总行提示可用参数放宽。
+- **规模开关**（复盘 #15）：`MTA_RAG_MAX_DOCS`（默认 50000）可覆盖；超限报错文案带上「调大该变量或换外部索引」；新增 `GET /api/rag/status`（built/indexing/backgroundIndex/store/lastSync/docLimit）。
+- **文档**：README 增加 `eval/rag-corpus/` 说明与「LCC 只能压测、不要入库」提示；`.env.example` 补 `MTA_RAG_BACKGROUND_INDEX` / `MTA_RAG_MAX_DOCS`。
+
+**实测**：
+
+- 单文档增量（20 篇 / 40 chunks，真 qwen）：全量 **4,395ms** → 改 1 篇后 **451ms**（只重算该篇 2 个 chunk）；服务端开后台补索引后，这 451ms 不再挡检索。
+- 全量测试 **450/450**（新增 68f 后台补索引）；`typecheck` 0 错误；`doctor` 8 项全通过。
+
+**仍然遗留（需要单独一轮）**：前端索引状态 UI、`data_vec`（256 维 hash）与 RAG 双轨统一、真实 HTTP 端到端脚本、以及复盘里属于方法论的部分（优先级排序、先冻结尺子再谈提升）——后者已写入根 `AGENTS.md`「规模原则」。
+
+### 当日总结与复盘（报告，纯文档）
+
+- 新增 `reports/SUMMARY_2026-10-23.md`：用非技术语言解释「文档导入器 / 冷启动 / 持久化索引」，附硬数据、**做错的 5 条 + 判断失误 4 条 + 遗憾 6 条**、规模原则与下一轮验收标准（含术语小抄）；已登记 README §7 与 PROJECT_REPORT §8 文档地图。
+- 复盘结论：① 优先级排错——该先修「重启等 52 秒」，却先做「提检索准确率」；② 先下结论后扩样本（18→34→51→61 条，两轮结论被自己推翻）；③ 评测语料一直没冻结，导致今天复跑数字不可与昨天比。
+
+### RAG 索引持久化（P0）：冷启动 52.3s → 254ms
+
+**背景**：索引只活在内存（`KnowledgeHub.ragCache`），重启后首次检索要重跑**全部** embedding；`putData` 每次写入还会把整库索引置空。语料涨到 979 docs / 1107 chunks 后，这一步变成 52 秒的阻塞等待——最贵的一次计算被放在了用户查询时，且算完就丢。
+
+**改动**：
+
+- 新增 `src/knowledge/ragIndexStore.ts`：`rag_chunks`（chunk 正文 + 1024 维向量 BLOB + `doc_hash` + `model/dim/chunk_config`）+ `rag_index_meta`（指纹）；单文档的 chunk 在**同一事务**里整批替换（先删后插，不留半新半旧）。
+- `RagPipeline.fromChunks()`：从持久化数据重建内存 BM25 + FlatIndex，**不调用 embedding**；`build()` 改为「算 embedding → fromChunks」。**检索代码一行未改**。
+- `KnowledgeHub.rebuildRag()` 改为**增量同步**：只重算 `doc_hash` 变化的文档、删文档级联删块、指纹（model/dim/chunkSize-overlap）变化才全量重建。
+- 刻意不做：检索下沉 SQL（FTS5 `unicode61` 对连续中文分词差，会静默降召回）、`data_vec`（256 维 hash）迁移——都是独立工程。
+
+**实测**（真实知识库 979 docs / 1107 chunks / `qwen3-embedding-0.6b@1024`）：
+
+- 首次构建 **53,874 ms**（1107 chunk 全嵌入）→ 模拟重启（同库、新进程）**254 ms / 0 次 embedding**（约 212×）。
+- 数据库体积 47.5 MB → 50.2 MB（+2.7 MB：向量 + chunk 正文）。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **449/449**（新增 `tests/68` 5 例：重启零嵌入 / 单文档增量 / 级联删除 / 指纹变更 / 检索一致）；`npm run agents:lint` 通过。`rag:bench` 复跑 61 条 hybrid_rerank 72.1%，但语料已从 19 文档/151 chunks 漂移到 **23/219**，**不可与 §8.10 直接对比**（评测语料未冻结）。
+
+### 语料治理：通用文档导入器 + LCC 2000 条索引压测
+
+**背景**：知识库里只有 `runs` / `conversations` 两类自动数据；`ingest-knowledge.ts --dir` 只写「路径 + 大小」的文件树，**不读正文**——真正的知识（docs / reports / 决策记录）一条都搜不到。
+
+**改动**：
+
+- 新增 `scripts/ingest-docs.ts`（`npm run ingest:docs`），读 `.md/.mdx/.txt/.jsonl` **正文**：Markdown 按标题切节、段落打包到 `--max-chars`（默认 3000）；jsonl 一行一条、长文本切块（不截断）、字段自动探测或 `--jsonl-field` 指定。
+- `--exclude runs,history` 排除子目录（`reports/runs/` 是 323 份按 run 生成的证据缓存，进库只稀释召回）；`--replace` 导入前清空同 collection（`data_items` / FTS / `data_vec` 三表一起清）；`--build-index` 导入后立即构建 RAG 索引并打印耗时。
+- 幂等 `itemId = <相对路径>#<序号>`。**不调用 `buildRuntime`**——那会触发「启动回收孤儿 run」，把正在运行的服务里未完成的 run 标成 failed。
+
+**实测**：
+
+- `docs/`：19 文件 → **359 条 / 165.4 KiB**；`reports/`（`--exclude runs`）：22 文件 → **395 条 / 270.0 KiB**；知识库合计 **979 条**（docs 359 / reports 395 / runs 223 / notes 2）。FTS `'"cross"*'` 可命中 `RAG_AND_AGENT_STACK.md#14` 等。
+- LCC 压测（临时库 `data/stress-lcc.db`，跑完删除）：`D:\数据集\lcc_sample.jsonl` 2000 条（6.4 MB）→ 导入 **2000 条 / 5,856.5 KiB**（约 19s），RAG 构建 **3004 chunks / qwen3-embedding-0.6b@1024 / 210.2s**（≈70ms/chunk，CPU Ollama）；临时库 **77.9 MB**（≈39 KB/doc）。
+- 真知识库 `--build-index`：**979 docs → 1,107 chunks / 52.3s**（≈47ms/chunk）——本机「重启后首次检索」的冷启动代价。
+
+**结论**：文档导入打通后，**索引构建成为瓶颈**——2000 文档 3.5 分钟、按此速率 50k 文档约 1.5 小时，且索引只在进程内（重启后首次检索重建）。持久化 / 增量索引排到 RAG 改造 Step 1。LCC 仅作压测：该 shard `gt` 全空、`context` 中位 13,419 字符，样本只取前 3000 字符，不代表数据集全貌。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **444/444 通过 / 0 跳过 / 0 失败（22.8s）**；`npm run agents:lint` 三项通过。详见 `reports/RAG_IMPROVEMENT_2026-10-23.md` §8.11。
+
+### 本地 cross-encoder rerank + 评测集扩到 61 条
+
+**背景**：§8.8 证明词法 reranker 会打乱语义排序（nDCG 反而 −0.032），需要真 cross-encoder 才能判断「rerank 到底值不值」。
+
+**改动**：
+
+- 新增 `src/knowledge/httpReranker.ts`：HTTP cross-encoder 适配器，**fail-open**（服务不可用时退回 `priorScore`，不让检索 500）。
+- `src/knowledge/hybrid.ts`：`Reranker.rerank` 返回类型改为「同步或异步均可」；`ragPipeline.ts` 统一 `await`，`RagBuildOptions` 新增 `reranker`。
+- 新增 `scripts/rerank-server.py`：`sentence-transformers` + `BAAI/bge-reranker-base`（CPU，127.0.0.1:8930，模型放 `D:\bge-reranker\model`）。
+- `scripts/rag-bench.ts`：`MTA_RERANKER_URL` 存在时启用 CE，报告头记录实际 reranker；评测集扩到 **61 条**（新增 10 条**隐喻型**，零词面重叠）。
+
+**实测**：
+
+- **CE 明显提升排序**：51 条上 MRR 0.535→**0.650**、nDCG 0.354→**0.445**；61 条上 MRR 0.486→**0.573**、nDCG 0.331→**0.391**。
+- **代价 4.8s/查询**（CPU：15 候选 × 512 token ≈ 7680 token/查询）——交互式检索不可接受。
+- **隐喻型是唯一 vector 明显压过 keyword 的一档**（50.0% vs 30.0%）；而 `hybrid` 40.0% **低于纯 vector** → 融合在高抽象查询上会稀释语义信号。
+- 61 条总体分数下降是新增了最难 10 条，**不是退化**。
+
+**结论**：CE 质量最优但太慢 → 保持默认关，`MTA_RERANKER_URL` 显式开启；默认检索仍用 `hybrid`；高抽象查询应降词法权重或走纯 vector。
+
+**验证**：`npm run typecheck` 0 错误。
 
 ---
 

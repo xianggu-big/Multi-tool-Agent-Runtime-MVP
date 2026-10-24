@@ -2,7 +2,9 @@
 
 > **一页读懂**：这个 Runtime 现在能做什么、实测到什么程度、哪里还不可靠、下一步该做什么。
 > **更新方式**：每次有实质改动就更新本文件（配合 `reports/CHANGELOG.md` 的明细）。
-> **最后更新**：2026-10-23 ｜ 对应测试规模：**67 个测试文件 / 444 个子测试（444 通过 / 0 失败 / 0 跳过）**；Docker 已启动，`40j` 已补跑通过；`eval:edit` 7/7 ｜ 参数现状见 `reports/PARAMETERS.md`
+> **最后更新**：2026-10-24 ｜ 对应测试规模：**72 个测试文件 / 465 个子测试（465 通过 / 0 失败 / 0 跳过）**；Docker 已启动，沙箱用例回归；`eval:edit` 7/7 ｜ 参数现状见 `reports/PARAMETERS.md`
+> **工作台 UI（2026-10-23~24）**：`public/index.html` 改蓝黑单主题（深蓝黑四层表面 + 亮蓝高亮，CSS 约 120 处硬编码浅色收敛为 `--tint-*` 变量，JS/SVG 同步换色）；统一按钮 hover/active/focus-visible/disabled；深色滚动条与 `color-scheme: dark`；方块运行灯（`body[data-run-state]` 驱动）+ 运行中按钮文案切换 + 对话框 Esc 关闭。布局改版（方案 B）：**删除顶部大标题区**，设置面板改**可收起侧栏**（✕ / ≡ / Ctrl+B，状态记 localStorage），MCP 状态行搬入侧栏顶部，收起后主视图全宽 + 左上角悬浮「≡ 设置」。2026-10-24：**全部常驻注释收拢为悬停自定义 tooltip**（12 处 hint 删除、11 处原生 title 替换、routeNote 截断、输入栏整理；延迟分级 ≤20 字 1s/长 3s + 键盘 focus 触发）；侧栏 sticky + `<900px` 单列响应式（窄屏首访默认收起）；运行灯命中区扩大；Mock 模式自动填演示剧本。**写路径深色实测通过**（真 DeepSeek 编排写：审批卡/diff/瀑布图可读 → 落盘 completed）。SSE 防卡死渲染逻辑未动；浏览器实测全 PASS。明细 `reports/CHANGELOG.md` 2026-10-24 两条目。
+> **Codex / 定时任务（2026-10-23）**：新增 `runType='codex'`（本机 `codex exec --json` 外部适配器）、`codex_exec` 工具、`codex-code` 子 Agent，以及进程内定时任务 + `pending_actions` 无人值守策略（普通改动自动放行、删除/命令暂缓）。真实 E2E：只读两轮续问 / 写模式审批落盘 / 定时+自动审批+删除暂缓均通过。入口 `docs/CODEX_AND_SCHEDULES.md`，方案 `reports/CODEX_SCHEDULER_PLAN.md`。
 > **真实端到端（2026-10-23）**：`npm run mcp:e2e`（真模型自主调用 MCP）与 `npm run e2e:write`（HTTP → 沙箱 → 审批 → 落盘 → 宿主复验）均 PASS；证据、token/耗时与边界见 `reports/MCP_WRITE_E2E.md`。**样本=各 1 次，不外推成功率**。
 > **项目工具**：`.agents/skills/{mta-verification,mta-reporting}/`（仓库级 Codex skill：验证/复跑流程、核心报告集 + 专项评测 + 收尾清单）
 > **安全审查**：2026-10-13 全面代码审查 + 对抗性测试（`reports/CODE_REVIEW_2026-10-13.md`）；**P0×2、P1×4 与 P2-1~P2-6 已修复并转为回归守卫（2026-10-19 收口）**，剩 P2-7（无鉴权，README 已声明仅本机）/ P3×3
@@ -18,7 +20,9 @@
 
 | 能力 | 状态 | 实测到什么程度 |
 |---|---|---|
-| **共享 Agent Loop** | ✅ 可用 | 一套循环驱动 4 个 Agent（codebase / research / misc / orchestrator），预算·权限·超时·检查点统一强制 |
+| **共享 Agent Loop** | ✅ 可用 | 一套循环驱动 4 个内置 Agent（codebase / research / misc / orchestrator），预算·权限·超时·检查点统一强制；Codex 作为外部适配器另走 `runType='codex'`，但复用同一套 run/事件/审批/复盘 |
+| **Codex 直连（外部 Agent）** | ✅ 可用（本机实测） | `codex exec --json` 只读/写模式；思考 rollout 旁路 best-effort；`codex exec resume` 续问（threadId + workspaceId）。写模式只改稳定副本 → 导入 → 复用 `submit_changes` 落盘。真实 E2E：只读两轮 + 写模式 1 次审批落盘均 completed；断言见 `tests/70/71` |
+| **定时任务 + 无人值守** | ✅ 可用 | 进程内 30s tick（once/daily，停服不补跑、重叠跳过）；`pending_actions` 暂缓删除/命令，事后执行/忽略；删除执行前复核 `baseHash`。真实 E2E：自动审批 edit 落盘 + delete 待确认 → 手动执行；回归 `tests/69/72` |
 | **Codebase Agent** | ✅ 可用 | 真实本地 I/O（搜索/读取/受限测试）；`run_tests` 默认**不进工具池**（白名单 + `shell:false`），界面显式勾选「允许运行测试」或 `allowRunTests:true` 才启用（2026-10-22）；未开启时不会白调一次再拿 `DISABLED` |
 | **真实模型编辑（code-edit）** | ✅ 可用（小任务/小规模多文件） | Docker 沙箱 + 自动 `allow_once` + 宿主 L2 + 源码断言；26 条任务 **26/26**、L2 **26/26**（20 引导 / 4 盲测 / 2 多文件）、833,082 tokens / \$0.0248 / 平均 22.7s，单轮 95% Wilson 下界 **87.1%**。仍不外推大型重构或需人工澄清的需求 |
 | **Research Agent** | ✅ 可用 | `fetch_page` 真实网络（仅 mock 单测验证 SSRF/重定向）；`web_search` 默认 OFFLINE_MOCK |
@@ -37,7 +41,8 @@
 | **任务分流** | ✅ 可用 | 规则式（不调 LLM）：琐事→misc、多分区只读→编排、改代码→codebase、调研→research；破坏性动作标 `requiresHuman` |
 | **子 Agent 生命周期** | ✅ 可用 | importance 三档（ephemeral/session/durable）+ 七条释放判定 + LRU 池驱逐；一次性任务结果采纳即释放、审计类保留供追问（`SubAgentLifecycle.ts`，31 测试） |
 | **知识库语义召回** | ✅ 可用 | FTS5 原生 MATCH（AND 语义）与 vec0 kNN **均已实测生效**（`available=true, vectors=2`，回归守卫钉死原生可用性）；LIKE / 内存余弦为显式兜底 |
-| **切块级 RAG（chunk + 混合检索 + rerank）** | ✅ 可用 | 文档 → 512/64 切块（`text` 可精确按偏移切片，标题只进 `embedText`）→ embedding（离线 hash 默认；设 `MTA_EMBEDDING_MODEL` 切真实模型）→ BM25 + Flat/HNSW/IVF（支持删除/upsert）→ RRF/加权融合 → rerank（尾部短块按原文区间合并，overlap 不重复）；`POST /api/rag/rebuild`（分页、上限 5 万文档）、`GET /api/rag/search`、Agent 工具 `knowledge_search`；`npm run rag:bench` / `rag:ablation` 产出 `reports/RAG_EVAL.md` / `RAG_ABLATION.md`（19 文档 / 151 chunks / 18 查询：RRF 88.9% → rerank **100%**，MRR 0.690→0.750，nDCG 0.536→0.638） |
+| **知识库语料导入** | ✅ 可用（2026-10-23） | `npm run ingest:docs`（`scripts/ingest-docs.ts`）读 `.md/.mdx/.txt/.jsonl` **正文**：Markdown 按标题切节 + 段落打包（`--max-chars` 默认 3000）、jsonl 一行一条且长文切块；支持 `--exclude` / `--replace`（三表一起清）/ `--build-index`（导入后立即建索引）。实测真知识库 **979 条**（docs 359 / reports 395 / runs 223 / notes 2），冷启动建索引 **1,107 chunks**（持久化前 52.3s → 持久化后 **254ms**）；LCC 2000 条压测：导入 19s、RAG 构建 3004 chunks / 210s（≈70ms/chunk，CPU Ollama）。详见 `reports/RAG_IMPROVEMENT_2026-10-23.md` §8.11 |
+| **切块级 RAG（chunk + 混合检索 + rerank）** | ✅ 可用 | **索引持久化（2026-10-23）**：chunk 正文 + 向量落 `rag_chunks`，按 `doc_hash` 增量刷新、指纹（模型/维度/切块）变化才全量重建；重启重建 **254ms / 0 次 embedding**（持久化前 52.3s）；`MTA_RAG_BACKGROUND_INDEX=true` 时写入后**后台补索引**、不挡检索；状态见 `GET /api/rag/status`。回归 `tests/68`（6 例）。检索仍为内存 BM25 + Flat（5 万文档量级需下沉）。文档 → 512/64 切块（`text` 可精确按偏移切片，标题只进 `embedText`）→ embedding（离线 hash 默认；设 `MTA_EMBEDDING_MODEL` 切真实模型）→ BM25 + Flat/HNSW/IVF（支持删除/upsert）→ RRF/加权融合 → rerank（尾部短块按原文区间合并，overlap 不重复）；`POST /api/rag/rebuild`（分页、`MTA_RAG_MAX_DOCS` 默认 5 万）、`GET /api/rag/search`、Agent 工具 `knowledge_search`；`npm run rag:bench` / `rag:ablation` 产出 `reports/RAG_EVAL.md` / `RAG_ABLATION.md`（**语料已冻结在 `eval/rag-corpus/`**，基线 61 queries / 220 chunks） |
 | **MCP（server + client + 桥接 + 主路径配置 + 安全/运维）** | ✅ 可用 | stdio / Streamable HTTP（客户端增量解析 SSE + `Mcp-Session-Id`）两种 transport；`initialize → tools/list → tools/call`；`registerMcpTools()` 把外部工具变成普通 Tool（JSON Schema 原样暴露，权限 `mcp:call`，风险按 annotations 推断）；取消信号可穿透到 `notifications/cancelled`（客户端超时也会主动发 `reason:'timeout'`）；`POST /mcp` / `DELETE /mcp`。**主路径可配**：`MTA_MCP_SERVERS`（JSON 数组 + `names` 白名单）→ `McpClientRuntime` 并行连接 → 按 runType 进工具池；`GET /api/mcp` 安全状态；单 server 失败只报 `MCP_UNAVAILABLE`。**2026-10-23 补安全与运维**：`destructiveHint=true` 默认必须人工批准（无审批通道 → `MCP_APPROVAL_REQUIRED`；拒绝不执行），`POST /api/mcp/reconnect` 可把 error 恢复为 ready 且不产生同名工具冲突。**真实 MCPHub 0.12.10 已 E2E**（54 工具 / 104ms）；**真实 DeepSeek 已自主选择 MCP 工具**（`npm run mcp:e2e`，3,756 tok / 2.8s）。回归 `tests/44` + `tests/64` |
 | **编排预筛闸门** | ✅ 可用 | 自动分流先估算「单上下文是否装得下」+ 多信号（交叉验证/分区审计/并行）；装得下就不默认编排。显式编排不强制降级，但 gate 写入响应/`run_started`/系统提示，可解释「为什么没拆」。回归 `tests/65`；**未重做真实 A/B** |
 | **读文件台账** | ✅ 可用 | `run_digest.readStats`：`read_file` 总次数 / 去重路径 / 重复次数 / Top 重复路径；前端复盘面板可见。只观测，不承诺省 token；回归 `tests/56g` |
@@ -234,6 +239,7 @@ curl -s "http://localhost:3000/api/errors?view=summary"   # 高频错误聚合�
 | **`reports/PROGRESS_2026-10-16.md`**（快照，一次性） | 想看某一时点的整体进度：完成状态 / 进行中 / 阻塞与风险分级（按需追加新快照） |
 | **`reports/RUN_REVIEW_2026-10-16.md`**（复核快照，一次性） | 想核查某段实测会话「agent 说法 vs 实际记录」：逐条判定 + 证据索引（按需追加新复核） |
 | **`reports/HEALTH_CHECK_2026-10-23.md`**（全身检查，一次性，只读） | 要接 MCP / 改权限 / 补契约门禁之前：门禁基线、权限矩阵、P0（`permissionsOf` 缺失与 `maxRiskLevel` 未校验）、建议改动与验收方法 |
+| **`reports/SUMMARY_2026-10-23.md`**（当日总结与复盘，一次性） | 想用**非技术语言**理解「导入器 / 冷启动 / 持久化」到底做了什么，或想看诚实的事后复盘（做错的 5 条、判断失误 4 条、遗憾 6 条）与下一轮验收标准 |
 | **`reports/UI_STREAM_PERF.md`**（人写） | 想验证“长回答会不会把浏览器卡死”：真实 Edge + 真实 SSE，5 万条增量 burst 的 Task/JS/Layout、longtask、帧间隔与修复前后 DOM 节点对照；`npm run perf:stream-ui` |
 | **`reports/MCP_WRITE_E2E.md`**（人写，2026-10-23） | 想核实「模型真的会自己调 MCP 工具吗」「HTTP 审批真的会落盘并复验吗」：两条真实 E2E 的 token/耗时/事件证据、暴露的摩擦与修复、复现命令与边界 |
 | **`docs/WRITE_PRINCIPLES.md`** | 要改**写路径**（工具 / 审批 / 沙箱 / 回滚）之前：方针层原则（能力常开、动作门控）+ 四道审核闸 + 四层回溯 + 自检清单 |

@@ -3,7 +3,21 @@
 > 本项目代码在 `multi-tool-agent/`（注意：`multi-tool-agent/agents/AGENTS.md` 是**生成的子 Agent 契约文档**，与本文件无关，勿混淆）。
 > 本项目规模较大、自己已有一套文档体系（README / docs / reports），**改动前先读 `multi-tool-agent/reports/PROJECT_REPORT.md`**。
 
-## 当前状态（最后更新 2026-10-23 第二轮；工程实测基线 2026-10-23 = **67 个测试文件 / 444 子测试 / 444 通过 / 0 失败 / 0 跳过 / 约 26s**；Docker 已启动，`40j` 已补跑通过）
+## 当前状态（最后更新 2026-10-24 第九轮；工程实测基线 2026-10-24 = **72 个测试文件 / 465 子测试 / 465 通过 / 0 失败 / 0 跳过**（Docker 已启动，沙箱用例回归））
+
+> **✅ 工作台打磨八项（2026-10-24 第九轮，纯前端）**：tooltip 延迟分级（≤20 字 1s / 长说明 3s）+ 键盘 focus 触发；侧栏 sticky（视口内独立滚动）；`<900px` 单列响应式 + 窄屏首访默认收起；运行灯命中区 `::before inset:-6px`；Mock 模式按任务类型自动填演示剧本（手动选择不覆盖）；**写路径深色实测通过**（真 DeepSeek 编排写任务：审批卡/diff/瀑布图可读，落盘 completed，真实任务 +1 → 415/71）。`npm test` 465/465；确定性合成事件测试全命中。明细 `reports/CHANGELOG.md` 2026-10-24「打磨八项」条目。
+
+> **✅ 注释收拢悬停 3 秒 tooltip（2026-10-24 第八轮，纯前端）**：用户反馈「排版好乱」→ 全部常驻说明文字改为**悬停 3 秒**才出现的自定义深色气泡（`.tipbox` + document 级 mouseover 委托，`data-tip` 静态 / `data-tip-src` 动态）：删 12 处 `<p class="hint">`（写能力/编排/杂项/Codex/Token/实时流/4 页签/run_tests/Key 边界），11 处原生 `title` 全替换，标签加 ⓘ；输入栏整理（run_tests 复选框文案缩短、routeNote 省略号截断）。**修 bug**：scroll 捕获监听原会取消待触发定时器 → 悬停期间任何滚动气泡永不出现，改为只隐藏已显示。tests/59/61 守卫未触碰；`npm test` 464 通过/1 跳过（Docker 未启动）；浏览器实测 2s 不弹/4s 弹/移开消失 PASS。明细 `reports/CHANGELOG.md` 2026-10-24。
+
+> **✅ 工作台蓝黑主题 UI（2026-10-23 第七轮，纯前端）**：`public/index.html` 改深蓝黑四层表面（`--bg #0b1220`）+ 亮蓝高亮单主题；CSS 约 120 处硬编码浅色收敛为 `--tint-*` 半透明状态色，JS 38 处内联色与 SVG 瀑布图同步；统一按钮 hover/active（硬边阴影+位移，像素点缀）/focus-visible/disabled；深色滚动条 + `color-scheme: dark` + `::selection`；方块运行灯（`body[data-run-state]` 挂 `renderStatus`）+ 运行中按钮文案切换 + 写意图对话框 Esc 关闭。**同日布局改版（方案 B）**：删顶部大标题区（含 tagline），设置面板改**可收起侧栏**（✕ / ≡ / Ctrl+B，状态记 `localStorage['mta.sidebarCollapsed']`），MCP 行搬侧栏顶部（id 不变），收起后主视图全宽 + 左上角悬浮「≡ 设置」含第二颗灯。**SSE 防卡死渲染逻辑未动**；无新增测试（tests/59/61 静态断言守卫通过）；浏览器实测布局/快捷键/刷新记忆 PASS。明细 `reports/CHANGELOG.md` 同日两条目。
+
+> **✅ Codex 直连 + 定时任务（2026-10-23 第六轮）**：① **`runType='codex'`** 直接驱动本机 `codex exec --json`（`src/codex/`），复用 run/SSE/取消/审批/复盘；只读走隔离副本（排除 `.env*/.git/data`），写模式只改稳定副本 → `scanCodexChanges` → 复用 `submit_changes`（阶梯/审批/journal/落盘/宿主复验）。② 续问走 `codex exec resume`（threadId + workspaceId；resume 不接受 `-C`）；思考用 rollout 旁路 best-effort，失败降级。③ 三入口：runType / `codex_exec` 工具 / `codex-code` spec（`agents:lint` 通过）。④ **定时任务**：`schedules` 表 + 30s tick（once/daily、停服不补跑、重叠跳过）+ REST API + UI「定时」页签；`runs.scheduleId` 迁移列；只在 `src/index.ts` 启动。⑤ **无人值守**：普通 edit 自动放行；删除/命令进 `pending_actions`，事后「执行/忽略」；删除执行前复核 `baseHash`，污点整批拒绝。⑥ 修阶梯对非 TS 仓库误判（无 `tsconfig.json` 跳过 tsc、无 test 入口跳过测试）。真实 E2E：只读两轮续问、写模式 1 次审批落盘、定时+自动审批+删除暂缓均通过。测试 **72 文件 / 465 子测试 / 465 通过**。入口 `multi-tool-agent/docs/CODEX_AND_SCHEDULES.md`，方案 `reports/CODEX_SCHEDULER_PLAN.md`。遗留：思考旁路非公开契约、Codex 费用未计入、MCP destructive 不进待确认、定时任务停服不补跑。
+
+> **✅ 按复盘清单修复（2026-10-23 第五轮，清单见 `reports/SUMMARY_2026-10-23.md` §8.4）**：① **后台补索引** `KnowledgeHubOptions.backgroundIndex`（env `MTA_RAG_BACKGROUND_INDEX`，默认关、本机 `.env` 已开）：写入/删除 O(1) 标脏 + 后台刷新，前台检索与后台补算共享同一 in-flight 构建，`dataVersion` 防止构建期间写入导致返回旧缓存（回归 `tests/68f`）。② **评测语料冻结** `eval/rag-corpus/`（23 文件快照）：`rag-bench` 优先读快照并在报告头标注；新基线 **61 queries / 220 chunks**、hybrid_rerank 72.1% / MRR 0.504（跨天可比）。③ **失败可诊断**：embedding 连接失败文案带 baseUrl 与 `ollama serve` 提示；`npm run doctor` 新增 **Embedding 探针**（实测 qwen3-embedding-0.6b / 1024 维）。④ **导入器** `--max-file-bytes` 默认 2→8 MiB，超限文件始终打印文件名+大小。⑤ **规模开关** `MTA_RAG_MAX_DOCS`（默认 50000）+ `GET /api/rag/status`（built/indexing/store/lastSync/docLimit）。实测单文档增量：20 篇全量 4,395ms → 改 1 篇 451ms。**遗留**：前端索引状态 UI、`data_vec`（256 hash）与 RAG 双轨统一、真实 HTTP 端到端。全量 **450/450**。
+
+> **✅ RAG 索引持久化 P0（2026-10-23 第四轮）**：索引原先只在内存（`KnowledgeHub.ragCache`），重启后首次检索重跑全部 embedding（979 docs / 1107 chunks = **52.3s**），且 `putData` 每次写入都整库置空。新增 `src/knowledge/ragIndexStore.ts`（`rag_chunks`：chunk 正文 + 1024 维向量 BLOB + `doc_hash` + model/dim/chunk 指纹；`rag_index_meta`）、`RagPipeline.fromChunks()`（从持久化数据重建内存 BM25 + Flat，**不调 embedding**）、`KnowledgeHub.rebuildRag()` 改**增量同步**（只重算 `doc_hash` 变化的文档 / 删文档级联删块 / 指纹变化才全量）。实测：首次 53,874ms → **模拟重启 254ms、0 次 embedding**（约 212×）；库 47.5→50.2MB。检索代码未改，刻意不下沉 SQL（FTS5 中文分词差）、不混用 `data_vec`。回归 `tests/68`（5 例）；全量 **449/449**。**遗留**：无后台 worker（新写入下次检索同步补齐）、内存索引仍在（5 万文档量级需 Phase 2）、评测语料未冻结（本次 bench 语料 23/219 vs §8.10 的 19/151，不可直接对比）。
+
+> **✅ 知识库语料导入器 + LCC 压测（2026-10-23 第三轮）**：新增 `scripts/ingest-docs.ts` / `npm run ingest:docs` —— 读 `.md/.mdx/.txt/.jsonl` **正文**（Markdown 按标题切节 + 段落打包 `--max-chars` 默认 3000；jsonl 一行一条、长文切块而非截断），`--exclude` / `--replace`（`data_items` + FTS + `data_vec` 三表一起清）/ `--build-index`；幂等 `itemId=<相对路径>#<序号>`；**不调用 `buildRuntime`**（避免「启动回收孤儿 run」误伤在线服务）。实跑真知识库 **979 条**（docs 359 / reports 395 / runs 223 / notes 2；`reports/` 排除 323 份 `reports/runs/` 证据缓存）。LCC（`D:\数据集\lcc_python` 实为 LCC_python 重打包：仅 `context`/`gt` 两列、`gt` 全空、`context` 中位 13,419 字符）抽 2000 条压测：导入 **19s**、RAG 构建 **3004 chunks / 210.2s（≈70ms/chunk，CPU Ollama）**、临时库 **77.9MB（≈39KB/doc）**。结论：**索引构建成为新瓶颈**（按此速率 50k 文档约 1.5h，且索引只在进程内），持久化/增量索引排 Step 1。测试 **444/444**；详见 `reports/RAG_IMPROVEMENT_2026-10-23.md` §8.11。
 
 > **✅ 编排预筛 + MCP 安全/运维 + 真实 E2E 收口（2026-10-23 第二轮，任务表 `multi-tool-agent/reports/TASK_BOARD_2026-10-23.md`）**：① **编排预筛闸门** `src/runtime/orchestrationGate.ts`——自动分流先估算单上下文是否装得下（`bytes/3.2+8000 ≤ 预算×0.8`）+ 多信号判断；装得下就降为 codebase，显式编排不强制降级但 gate 写入响应/`run_started`/系统提示（回归 `tests/65`；**真实 A/B 未重跑**，`PARALLEL_AB.md` §6 已标边界）。② **读文件台账** `src/runtime/readStats.ts` → `run_digest.readStats` + 前端复盘面板（总次数/去重/重复/Top 路径；**只观测，不声称省 token**；`tests/56g`）。③ **MCP destructiveHint 人工闸门**：默认必须审批，无通道 fail-closed（`MCP_APPROVAL_REQUIRED`），拒绝不执行；Runtime 合并调用方 riskReasons，子 Agent 也注入审批通道（`tests/44h`）。④ **MCP 手动重连** `POST /api/mcp/reconnect`：error→ready 可恢复、重连不产生同名工具冲突（`tests/64i/64j`）。⑤ **真实模型自主调用 MCP**：`npm run mcp:e2e` PASS（3,756 tok / 2.8s / 2 次工具调用；修复前 9,487 tok / 7.1s）。⑥ **写能力 HTTP E2E**：`npm run e2e:write` PASS（38,542 tok / 95.7s / 1 次 allow_once 审批 / `src/calc.ts` 落盘 / 宿主 L2 ok / 0 回滚）。两条证据 `reports/MCP_WRITE_E2E.md`。⑦ **子任务历史**：`GET /api/subtasks/stats` + `npm run stats:subtasks`（聚合 `runs.resultJson`，默认排除 Mock；不建表；`tests/67`）。⑧ 修真实摩擦：`delegate_subtasks` 接受 JSON 字符串、`submit_orchestration.conflicts` 接受字符串（标为未结构化）、`run_tests` 关闭时不再出现在子 Agent 工具池（`tests/66`）。⑨ README 增加 Mermaid 架构图。**未做**：LICENSE（需用户选许可证）、T8 evidence 文件哈希（DEFERRED）、T10 MCPHub 旧 token 轮换（需用户）。
 
@@ -87,7 +101,23 @@
 
 - 仓库级 skill（随仓库走）：`.agents/skills/`（Codex 从 cwd 向上找 `.agents/skills`）；与 `~/.codex/skills` 同名时会**重复注入**；沙箱内**不可写**（deny ACL），改 skill 要在沙箱外
 
+**规模原则（2026-10-23 起，所有工程改进的默认约束）**
+- 目标不是「当前 979 条能跑」，而是 **10^5 / 10^6 / 10^7 文档量级仍可用**。每轮改动的第一问：再放大 100 倍会先撞哪堵墙。
+- 实测单价（本机 1024 维）：Flat 距离计算 **≈83ns/块**；embedding **≈47ms/chunk（CPU）**；存储 **≈30–50KB/doc**（`contentJson` + `searchText` + `rag_chunks.text` 三份正文）。
+- 外推（**推算，非实测**，未计访存/GC 恶化）：
+
+| 规模 | chunks（≈1.13/文档） | 向量常驻内存 | 单查询暴力 kNN | 全量重建（CPU） |
+|---|---:|---:|---:|---:|
+| 10^5 | ~113k | 463MB | ~9ms | ~1.5h |
+| 10^6 | ~1.13M | 4.6GB | ~94ms | ~15h |
+| 10^7 | ~11.3M | 46GB | ~940ms | ~150h |
+
+- **不能变成死路的 5 个决定**：① 禁止「全表读入内存」（`rebuildRag` 现在就是，>10 万条必须改流式 + 外部索引）；② 检索层不得假设索引在内存（`VectorStore` / `KeywordStore` 抽象，内存实现只是默认）；③ 正文只存一份（现在三份，10^7 时是 300–500GB）；④ 写入路径不做同步 O(N) 工作（后台队列）；⑤ 批量作业必须幂等 + 断点续跑。
+- **升级触发条件（未到阈值不提前做）**：`>50k docs` → 打开 sqlite-vec/ANN + chunk 级倒排；`>500k` → 向量量化（int8/PQ）+ GPU embedding + 专用向量库；`>5M` → 分片 / 分布式 + 粗到细检索 + 语义缓存。阈值前只保证**接口可替换**，不上重型组件。
+- 诚实边界：10^7 在本机单进程 + JSON/内存模型下不可达；真到那一档必须换成「服务 + 向量库 + GPU 入库」的形态，不是把现有代码调参。
+
 **下一步（按性价比）**
+- **RAG 下一轮（Step 2~3）**：Step 0 语料治理、Step 1 持久化/增量/后台补索引、评测语料冻结均已完成；下一步 Step 2 多查询改写/HyDE、small-to-big 父块回填（目标 Recall 72.1% → 80%+）；Step 3 默认检索改 `hybrid`（RRF）、rerank 默认关，CE 降延迟后再议；5 万文档量级再把检索下沉 `vec0`、并统一 `data_vec` 双轨。
 - **编辑评测继续加难度（R22 残余）**：26 条已含 4 条盲测 + 2 条多文件（`reports/EDIT_EVAL_REAL.md`）；下一阶段接“真实 HTTP run + 人工审批 + UI 事件流”的全链路 smoke，并扩到更多文件/更大 fixture；仍单独统计部分成功、重试轮次与回滚。
 - **提示注入红队（首版已完成）**：42 条固定样本 + `npm run security:redteam` 已落地；删除/宿主命令已禁用粘性复用并要求当前批次二次确认。剩余：扩真实改写/编码/多语言样本、降低安全文档误报，对「外传密钥 / 发布 / 改审批配置」加独立二次确认/能力令牌，不只依赖 run 级污点。
 - **口径修正（2026-10-19：①②③④ 已完成）**：① ~~`limit_reached` 独立成桶~~、② ~~编排报告 `gaps` 计数 + 前端「缺口 N」徽标~~、④ ~~子任务消耗分层计数（`subtaskUsage`）~~ 均已在 `src/types.ts` / `src/runtime/AgentRuntime.ts` / `public/index.html` 落地（回归用例在 `tests/22_orchestrator.test.ts` 22h/22m）；**③ 已完成**：新增 `ask_user` + `awaiting_user` 终态（回归 `tests/48`）；残余是只识别显式工具调用，正文提问仍可能被记为 completed。
